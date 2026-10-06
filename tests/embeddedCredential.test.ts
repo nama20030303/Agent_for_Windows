@@ -16,7 +16,6 @@ const KEY = 'sk-aa11bb22cc33dd44-ee55ff-66778899';
 const dirs: string[] = [];
 afterEach(() => {
   while (dirs.length) removeTempDir(dirs.pop()!);
-  fs.rmSync(path.join(process.cwd(), 'resources', 'bootstrap.json'), { force: true });
 });
 
 function dir(): string {
@@ -50,12 +49,15 @@ describe('credential obfuscation', () => {
 
 describe('build-time staging script', () => {
   it('writes a file the application can import, with no plaintext key in it', () => {
-    execFileSync(process.execPath, ['scripts/stage-embedded-credential.mjs', '--base-url', 'https://provider.example/v1', '--model', 'test-model'], {
-      env: { ...process.env, NEXUS_API_KEY: KEY },
-      cwd: process.cwd()
-    });
+    // Never write into resources/: a real build may already have a credential there.
+    const out = dir();
+    const file = path.join(out, 'bootstrap.json');
+    execFileSync(
+      process.execPath,
+      ['scripts/stage-embedded-credential.mjs', '--base-url', 'https://provider.example/v1', '--model', 'test-model', '--out', file],
+      { env: { ...process.env, NEXUS_API_KEY: KEY }, cwd: process.cwd() }
+    );
 
-    const file = path.join(process.cwd(), 'resources', 'bootstrap.json');
     const text = fs.readFileSync(file, 'utf8');
     expect(text).not.toContain(KEY);
     expect(text).not.toContain('sk-');

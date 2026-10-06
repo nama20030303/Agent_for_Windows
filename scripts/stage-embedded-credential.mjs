@@ -48,7 +48,7 @@ if (baseUrl) payload.baseUrl = baseUrl;
 if (model) payload.model = model;
 
 const root = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), '..');
-const target = path.join(root, 'resources', 'bootstrap.json');
+const target = arg('out') ? path.resolve(arg('out')) : path.join(root, 'resources', 'bootstrap.json');
 fs.mkdirSync(path.dirname(target), { recursive: true });
 fs.writeFileSync(target, JSON.stringify(payload));
 
