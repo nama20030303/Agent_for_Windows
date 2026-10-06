@@ -5,6 +5,7 @@ import path from 'node:path';
 import type { AgentMode, AppSettings, PermissionMode } from '../../core/shared/types.js';
 import { IPC } from '../../core/shared/ipc.js';
 import type { AppServices } from '../services.js';
+import { detectProvider } from '../../core/ai/autoDetect.js';
 import { createProvider } from '../../core/ai/index.js';
 import { GitManager } from '../../core/git/gitManager.js';
 import { runCommand } from '../../core/process/shell.js';
@@ -51,6 +52,30 @@ export function registerIpc(services: AppServices, getWindow: () => BrowserWindo
     if (!settings.ai.apiKey) return { ok: false, message: 'No API key stored. Enter the key and save it first.' };
     const provider = createProvider(settings.ai);
     return provider.testConnection();
+  });
+
+  /**
+   * Find the endpoint that matches the user's key instead of making them guess.
+   * The key is probed against known OpenAI-compatible hosts, most likely first.
+   */
+  handle(IPC.settingsDetect, async (input: { apiKey?: string; model?: string } = {}) => {
+    const settings = services.settings();
+    const apiKey = (input.apiKey ?? settings.ai.apiKey ?? '').trim();
+    if (!apiKey) {
+      return {
+        ok: false,
+        reachable: [],
+        attempts: [],
+        message: 'Enter the API key first — detection works by asking each provider whether it accepts it.'
+      };
+    }
+    const result = await detectProvider({ apiKey, model: input.model || settings.ai.model, currentBaseUrl: settings.ai.baseUrl });
+    if (result.ok && result.best) {
+      services.settingsStore.setApiKey(apiKey);
+      services.settingsStore.update({ ai: { ...settings.ai, baseUrl: result.best.baseUrl, model: result.best.model } });
+      services.rebuildAgent();
+    }
+    return result;
   });
 
   handle(IPC.settingsPermissionMode, (mode: PermissionMode) => {

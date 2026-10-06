@@ -11,7 +11,30 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const [apiKey, setApiKey] = useState('');
   const [mode, setMode] = useState<PermissionMode>('balanced');
   const [testing, setTesting] = useState(false);
+  const [detecting, setDetecting] = useState(false);
+  const [attempts, setAttempts] = useState<{ label: string; baseUrl: string; status: string }[]>([]);
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  // Finding the right endpoint is the step people get stuck on: ask every known
+  // host whether it accepts this key, then fill the form from the answer.
+  const detect = async () => {
+    setDetecting(true);
+    setResult(null);
+    setAttempts([]);
+    try {
+      const found = await api.settings.detectProvider({ apiKey: apiKey.trim(), model });
+      setAttempts(found.attempts);
+      if (found.ok && found.best) {
+        setBaseUrl(found.best.baseUrl);
+        setModel(found.best.model);
+      }
+      setResult({ ok: found.ok, message: found.message });
+    } catch (err) {
+      setResult({ ok: false, message: (err as Error).message });
+    } finally {
+      setDetecting(false);
+    }
+  };
 
   const steps = ['AI provider', 'Workspace', 'Permissions'];
 
@@ -52,6 +75,10 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                 <label>API key</label>
                 <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="Stored encrypted with Windows DPAPI" />
               </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <button className="btn btn-primary" disabled={detecting || !apiKey.trim()} onClick={() => void detect()}>
+                {detecting ? 'Looking for your provider…' : 'Find my provider automatically'}
+              </button>
               <button
                 className="btn"
                 disabled={testing || !apiKey.trim() || !baseUrl.trim()}
@@ -70,7 +97,25 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               >
                 {testing ? 'Testing…' : 'Test connection'}
               </button>
+              </div>
               {result && <div className={`banner ${result.ok ? 'ok' : 'err'}`} style={{ marginTop: 12 }}>{result.message}</div>}
+              {attempts.length > 0 && (
+                <details style={{ marginTop: 8 }}>
+                  <summary className="card-sub" style={{ cursor: 'pointer' }}>What each provider answered</summary>
+                  <div className="mono" style={{ fontSize: 12, marginTop: 6 }}>
+                    {attempts.map((a) => (
+                      <div key={a.baseUrl} style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
+                        <span>{a.label}</span>
+                        <span className="card-sub" style={{ margin: 0 }}>{a.status}</span>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
+              <div className="help" style={{ marginTop: 8 }}>
+                Detection sends the key to the hosts listed above, one at a time, only to ask which models
+                they serve. Skip it and fill the Base URL in by hand if you prefer.
+              </div>
             </>
           )}
 

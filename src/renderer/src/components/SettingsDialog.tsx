@@ -16,6 +16,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [apiKey, setApiKey] = useState('');
   const [hasKey, setHasKey] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [detecting, setDetecting] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string; modelAvailable?: boolean } | null>(null);
   const [paths, setPaths] = useState<{ appData: string; logs: string; database: string } | null>(null);
 
@@ -90,7 +91,30 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             <input type="checkbox" style={{ width: 'auto' }} checked={draft.ai.streaming} onChange={(e) => setDraft({ ...draft, ai: { ...draft.ai, streaming: e.target.checked } })} />
             Stream responses
           </label>
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 16 }}>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
+            <button
+              className="btn"
+              disabled={detecting || (!apiKey.trim() && !hasKey)}
+              onClick={async () => {
+                setDetecting(true);
+                setResult(null);
+                try {
+                  const found = await api.settings.detectProvider({ apiKey: apiKey.trim() || undefined, model: draft.ai.model });
+                  if (found.ok && found.best) {
+                    setDraft({ ...draft, ai: { ...draft.ai, baseUrl: found.best.baseUrl, model: found.best.model } });
+                    setHasKey(true);
+                    setApiKey('');
+                  }
+                  setResult({ ok: found.ok, message: found.message });
+                } catch (err) {
+                  setResult({ ok: false, message: (err as Error).message });
+                } finally {
+                  setDetecting(false);
+                }
+              }}
+            >
+              {detecting ? 'Detecting…' : 'Detect endpoint'}
+            </button>
             <button
               className="btn"
               disabled={testing}

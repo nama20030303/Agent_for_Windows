@@ -1,6 +1,7 @@
 /** IPC contract shared by the main process, the preload bridge and the renderer. */
 import type {
   AgentEvent,
+  DetectionResult,
   AgentMode,
   AppSettings,
   ApprovalDecision,
@@ -61,6 +62,7 @@ export interface NexusApi {
     setApiKey(key: string): Promise<{ ok: boolean }>;
     hasApiKey(): Promise<boolean>;
     testConnection(): Promise<{ ok: boolean; message: string; modelAvailable?: boolean; models?: string[] }>;
+    detectProvider(input: { apiKey?: string; model?: string }): Promise<DetectionResult>;
     setPermissionMode(mode: PermissionMode): Promise<void>;
   };
   workspace: {
@@ -132,6 +134,7 @@ export const IPC = {
   settingsSetApiKey: 'settings:setApiKey',
   settingsHasApiKey: 'settings:hasApiKey',
   settingsTest: 'settings:test',
+  settingsDetect: 'settings:detect',
   settingsPermissionMode: 'settings:permissionMode',
   workspacePick: 'workspace:pick',
   workspaceOpen: 'workspace:open',

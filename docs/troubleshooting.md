@@ -1,5 +1,12 @@
 # Troubleshooting
 
+**You do not know which Base URL belongs to your key**
+Paste the key and press **Find my provider automatically** (onboarding) or **Detect endpoint**
+(Settings). Nexus Code asks each known OpenAI-compatible host whether it accepts the key and which
+models it serves, then fills in the endpoint and the exact model id that host uses — the same model
+is called `am/…`, `nvidia/…` or `…:free` depending on the provider. The per-host answers are listed,
+so a rejected key is distinguishable from an unreachable host.
+
 **"Configure the AI provider API key in Settings first."**
 Settings → AI provider → paste the key → *Test connection*. The key is stored encrypted and is not
 readable by the UI afterwards.

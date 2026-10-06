@@ -12,6 +12,7 @@ const api = {
     setApiKey: (key: string) => ipcRenderer.invoke(IPC.settingsSetApiKey, key),
     hasApiKey: () => ipcRenderer.invoke(IPC.settingsHasApiKey),
     testConnection: () => ipcRenderer.invoke(IPC.settingsTest),
+    detectProvider: (input: { apiKey?: string; model?: string }) => ipcRenderer.invoke(IPC.settingsDetect, input),
     setPermissionMode: (mode: string) => ipcRenderer.invoke(IPC.settingsPermissionMode, mode)
   },
   workspace: {

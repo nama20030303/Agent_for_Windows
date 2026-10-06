@@ -376,3 +376,21 @@ export interface AppSettings {
   onboardingComplete: boolean;
   lastWorkspace?: string;
 }
+
+/** A host that answered a provider-detection probe. */
+export interface DetectedProvider {
+  providerId: string;
+  label: string;
+  baseUrl: string;
+  matches: string[];
+  models: string[];
+}
+
+/** Outcome of probing known OpenAI-compatible hosts with the user's key. */
+export interface DetectionResult {
+  ok: boolean;
+  best?: DetectedProvider & { model: string };
+  reachable: DetectedProvider[];
+  attempts: { label: string; baseUrl: string; status: string }[];
+  message: string;
+}

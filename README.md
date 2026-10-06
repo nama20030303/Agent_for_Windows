@@ -76,8 +76,10 @@ npm test               # the full test suite (it really builds, runs and verifie
 npm run build:win      # produces release/NexusCode-Setup-<version>.exe
 ```
 
-On first launch, onboarding asks for the model endpoint and API key (*Test connection* verifies it),
-the project folder, and your permission mode.
+On first launch, onboarding asks for the API key and then **finds the endpoint for you**: it asks
+each known OpenAI-compatible host whether it accepts the key and which models it serves, and fills in
+the base URL and that host's exact spelling of the model id. Then you pick the project folder and the
+permission mode.
 
 To skip onboarding on a machine you provision yourself, stage the credential once:
 

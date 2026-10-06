@@ -44,6 +44,12 @@ const previewApi: NexusApi = {
     setApiKey: notAvailable,
     hasApiKey: async () => false,
     testConnection: async () => ({ ok: false, message: 'Preview mode: no desktop backend is connected.' }),
+    detectProvider: async () => ({
+      ok: false,
+      reachable: [],
+      attempts: [],
+      message: 'Preview mode: no desktop backend is connected.'
+    }),
     setPermissionMode: async () => undefined
   },
   workspace: {
