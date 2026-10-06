@@ -57,6 +57,16 @@ and a live context panel (agent state, progress, changes, processes, token usage
 Four modes (**Chat / Plan / Agent / Auto**), slash commands, an inline tool-activity feed with diffs,
 an integrated terminal panel, a command palette (`Ctrl+K`), and dark/light themes.
 
+## Download
+
+**[⬇ NexusCode-Setup-0.1.0.exe](https://github.com/nama20030303/Agent_for_Windows/releases/latest)** — Windows 10/11 x64, 93 MB, no prerequisites.
+
+Every push to a working branch builds the installer on a `windows-latest` runner
+([`.github/workflows/build-windows.yml`](.github/workflows/build-windows.yml)): typecheck → full test
+suite → bundle → NSIS installer → GitHub release. The binary is **not code-signed**, so SmartScreen
+shows an unknown-publisher warning on first run — *More info → Run anyway*, or sign it with your own
+certificate.
+
 ## Getting started
 
 ```bash
@@ -118,5 +128,6 @@ tests/acceptance.scenarios     spec acceptance scenarios, end to end
 ## Status
 
 Core agent runtime, tool system, permission system, requirement analyst, verification loop,
-persistence, IPC and the full interface are implemented and tested. Packaging is configured for
-NSIS x64; the installer must be produced on Windows (`npm run build:win`).
+persistence, IPC and the full interface are implemented and tested. The Windows x64 installer is
+built in CI on every push and published as a release; `npm run build:win` produces it locally on
+Windows. The suite is green on both Linux and `windows-latest`.
