@@ -3,7 +3,10 @@ import type { AIProviderSettings, TokenUsage } from '../../src/core/shared/types
 
 export interface ScriptedTurn {
   content?: string;
+  /** Simulates a thinking model that replies with a scratchpad and no answer. */
+  reasoning?: string;
   toolCalls?: { name: string; arguments: Record<string, unknown> }[];
+  finishReason?: string;
 }
 
 /**
@@ -34,12 +37,13 @@ export class MockProvider implements AIProvider {
     const spec = turn ?? { content: 'No more scripted turns.' };
     return {
       content: spec.content ?? '',
+      reasoning: spec.reasoning,
       toolCalls: (spec.toolCalls ?? []).map((t) => ({
         id: `call_${++this.counter}`,
         name: t.name,
         arguments: JSON.stringify(t.arguments)
       })),
-      finishReason: spec.toolCalls?.length ? 'tool_calls' : 'stop',
+      finishReason: spec.finishReason ?? (spec.toolCalls?.length ? 'tool_calls' : 'stop'),
       usage: { inputTokens: 100, outputTokens: 50 }
     };
   }
@@ -60,6 +64,10 @@ export class MockProvider implements AIProvider {
 
   async getModels() {
     return ['mock-model'];
+  }
+
+  describe(): { model: string; baseUrl: string } {
+    return { model: this.settings.model, baseUrl: this.settings.baseUrl };
   }
 
   usage(): TokenUsage {

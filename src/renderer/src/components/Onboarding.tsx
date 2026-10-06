@@ -6,7 +6,7 @@ import type { PermissionMode } from '../../../core/shared/types.js';
 export function Onboarding({ onDone }: { onDone: () => void }) {
   const settings = useStore((s) => s.settings);
   const [step, setStep] = useState(0);
-  const [baseUrl, setBaseUrl] = useState(settings?.ai.baseUrl ?? 'https://api.nemotron.ai/v1');
+  const [baseUrl, setBaseUrl] = useState(settings?.ai.baseUrl ?? '');
   const [model, setModel] = useState(settings?.ai.model ?? 'am/nemotron-3-ultra-550b-a55b');
   const [apiKey, setApiKey] = useState('');
   const [mode, setMode] = useState<PermissionMode>('balanced');
@@ -37,7 +37,16 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               </div>
               <div className="field">
                 <label>Base URL</label>
-                <input type="text" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
+                <input
+                  type="text"
+                  value={baseUrl}
+                  onChange={(e) => setBaseUrl(e.target.value)}
+                  placeholder="https://your-provider.example/v1"
+                />
+                <div className="help">
+                  The OpenAI-compatible endpoint of the host serving this model — the URL its documentation
+                  shows for /chat/completions, without the path.
+                </div>
               </div>
               <div className="field">
                 <label>API key</label>
@@ -45,7 +54,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               </div>
               <button
                 className="btn"
-                disabled={testing || !apiKey.trim()}
+                disabled={testing || !apiKey.trim() || !baseUrl.trim()}
                 onClick={async () => {
                   setTesting(true);
                   try {

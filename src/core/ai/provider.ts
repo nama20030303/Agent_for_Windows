@@ -17,6 +17,12 @@ export interface RawToolCall {
 export interface ChatResponse {
   content: string;
   toolCalls: RawToolCall[];
+  /**
+   * Internal reasoning emitted by thinking models in `reasoning_content`.
+   * Captured only so the application can detect a reasoning-only reply and
+   * report it honestly — it is never shown to the user or persisted.
+   */
+  reasoning?: string;
   finishReason: string;
   usage?: { inputTokens: number; outputTokens: number };
   raw?: unknown;
@@ -56,4 +62,6 @@ export interface AIProvider {
   testConnection(): Promise<{ ok: boolean; message: string; modelAvailable?: boolean; models?: string[] }>;
   getModels(): Promise<string[]>;
   usage(): TokenUsage;
+  /** Model and endpoint, for diagnostics. Never includes the API key. */
+  describe(): { model: string; baseUrl: string };
 }

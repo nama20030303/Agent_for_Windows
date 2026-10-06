@@ -64,6 +64,18 @@ function toWireTools(tools: ToolDefinition[]): unknown[] {
   }));
 }
 
+/**
+ * Reasoning models (Nemotron, DeepSeek-R1 and friends) put their scratchpad in
+ * `reasoning_content` and may leave `content` empty. Read every spelling in use.
+ */
+function readReasoning(source: any): string | undefined {
+  for (const field of ['reasoning_content', 'reasoning', 'thinking']) {
+    const value = source?.[field];
+    if (typeof value === 'string' && value) return value;
+  }
+  return undefined;
+}
+
 export class OpenAICompatibleProvider implements AIProvider {
   readonly id: string = 'openai-compatible';
   private tokens: TokenUsage = { requests: 0, inputTokens: 0, outputTokens: 0 };
@@ -72,6 +84,10 @@ export class OpenAICompatibleProvider implements AIProvider {
     public settings: AIProviderSettings,
     private retry: RetryOptions = { retries: 3, baseDelayMs: 800 }
   ) {}
+
+  describe(): { model: string; baseUrl: string } {
+    return { model: this.settings.model, baseUrl: this.settings.baseUrl };
+  }
 
   usage(): TokenUsage {
     return { ...this.tokens };
@@ -167,6 +183,7 @@ export class OpenAICompatibleProvider implements AIProvider {
     this.tokens.outputTokens += json?.usage?.completion_tokens ?? 0;
     return {
       content: typeof message.content === 'string' ? message.content : '',
+      reasoning: readReasoning(message),
       toolCalls,
       finishReason: choice.finish_reason ?? 'stop',
       usage: { inputTokens: json?.usage?.prompt_tokens ?? 0, outputTokens: json?.usage?.completion_tokens ?? 0 },
@@ -186,6 +203,7 @@ export class OpenAICompatibleProvider implements AIProvider {
     const decoder = new TextDecoder();
     let buffer = '';
     let content = '';
+    let reasoning = '';
     let finishReason = 'stop';
     const partials = new Map<number, RawToolCall>();
     let usage: { inputTokens: number; outputTokens: number } | undefined;
@@ -218,6 +236,10 @@ export class OpenAICompatibleProvider implements AIProvider {
               content += delta.content;
               handlers.onDelta?.(delta.content);
             }
+            // Thinking models stream their scratchpad separately; collect it but
+            // never forward it to the UI.
+            const reasoningDelta = readReasoning(delta);
+            if (reasoningDelta) reasoning += reasoningDelta;
             for (const tc of delta.tool_calls ?? []) {
               const index = tc.index ?? 0;
               const existing = partials.get(index) ?? { id: tc.id ?? `call_${index}`, name: '', arguments: '' };
@@ -239,7 +261,7 @@ export class OpenAICompatibleProvider implements AIProvider {
     this.tokens.inputTokens += usage?.inputTokens ?? 0;
     this.tokens.outputTokens += usage?.outputTokens ?? 0;
 
-    return { content, toolCalls: [...partials.values()].filter((t) => t.name), finishReason, usage };
+    return { content, reasoning: reasoning || undefined, toolCalls: [...partials.values()].filter((t) => t.name), finishReason, usage };
   }
 
   async getModels(): Promise<string[]> {

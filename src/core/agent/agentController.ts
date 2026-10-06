@@ -84,6 +84,41 @@ interface SessionRuntime {
  * through the ToolManager, which enforces schema validation, security
  * validation and the permission system.
  */
+const EMPTY_RESPONSE_NUDGE =
+  'Your last reply contained no answer and no tool call. Put your answer in the normal response ' +
+  'content (not in an internal reasoning field), or call a tool. Continue now.';
+
+/**
+ * A model that returns nothing is a configuration problem, not a finished task.
+ * Turn the response shape into an explanation the user can act on.
+ */
+export function diagnoseEmptyResponse(
+  response: { content: string; reasoning?: string; finishReason: string },
+  provider: { model: string; baseUrl: string }
+): string {
+  const where = `Model \`${provider.model}\` at \`${provider.baseUrl || '(no endpoint configured)'}\``;
+
+  if (response.finishReason === 'length') {
+    return (
+      `${where} hit its output token limit before producing an answer. ` +
+      'Raise "Max tokens" in Settings (reasoning models need 16000 or more), or pick a smaller request.'
+    );
+  }
+  if (response.reasoning) {
+    return (
+      `${where} replied with internal reasoning only and no answer or tool call. ` +
+      'This usually means the endpoint streams a thinking model that needs a higher token limit, ' +
+      'or that it does not support tool calling. Raise "Max tokens", and verify the model supports ' +
+      'OpenAI-style function calling.'
+    );
+  }
+  return (
+    `${where} returned an empty response (finish reason: ${response.finishReason}). ` +
+    'Check in Settings that the base URL points at an OpenAI-compatible /chat/completions endpoint ' +
+    'and that the model name is exactly the one the provider exposes, then use "Test connection".'
+  );
+}
+
 export class AgentController {
   readonly events = new Emitter<AgentEvent>();
   private runtimes = new Map<string, SessionRuntime>();
@@ -165,8 +200,19 @@ export class AgentController {
 
     const maxIterations = options.maxIterations ?? 40;
     const maxRepairAttempts = options.maxRepairAttempts ?? 5;
+    let emptyResponses = 0;
 
     try {
+      const endpoint = this.deps.provider.describe();
+      if (!endpoint.baseUrl.trim()) {
+        const message =
+          'No AI endpoint is configured. Open Settings, enter the OpenAI-compatible base URL of the ' +
+          `host that serves \`${endpoint.model}\` (it ends in /v1), add the API key and use "Test connection".`;
+        this.emit({ type: 'error', sessionId: options.sessionId, message });
+        this.emitState(options.sessionId, 'FAILED', 'No AI endpoint configured.');
+        return;
+      }
+
       await this.prepareContext(options, rt);
 
       for (let iteration = 0; iteration < maxIterations; iteration++) {
@@ -190,10 +236,27 @@ export class AgentController {
         this.emit({ type: 'usage', sessionId: options.sessionId, usage: this.deps.provider.usage() });
 
         if (response.toolCalls.length === 0) {
-          // No tool calls: the model is answering or asking in prose.
-          this.emitState(options.sessionId, options.mode === 'chat' ? 'COMPLETED' : 'COMPLETED', 'Response delivered');
+          if (content) {
+            // The model answered or asked in prose. That is a complete turn.
+            this.emitState(options.sessionId, 'COMPLETED', 'Response delivered');
+            break;
+          }
+
+          // Nothing at all came back. Never report this as a finished turn:
+          // nudge the model once, then explain the problem to the user.
+          if (emptyResponses === 0) {
+            emptyResponses += 1;
+            rt.history.push({ role: 'user', content: EMPTY_RESPONSE_NUDGE });
+            this.timeline(options.sessionId, 'Model returned an empty response; retrying once');
+            continue;
+          }
+
+          const diagnosis = diagnoseEmptyResponse(response, this.deps.provider.describe());
+          this.emit({ type: 'error', sessionId: options.sessionId, message: diagnosis });
+          this.emitState(options.sessionId, 'FAILED', 'The model returned no usable response.');
           break;
         }
+        emptyResponses = 0;
 
         let shouldPause = false;
         let finished = false;
@@ -607,6 +670,7 @@ export class AgentController {
     this.emitState(options.sessionId, 'EXECUTING', 'Continuing');
     const maxIterations = options.maxIterations ?? 40;
     const maxRepairAttempts = options.maxRepairAttempts ?? 5;
+    let emptyResponses = 0;
     try {
       for (let i = 0; i < maxIterations; i++) {
         if (abort.signal.aborted) break;

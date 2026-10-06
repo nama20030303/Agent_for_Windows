@@ -15,6 +15,16 @@ create `%APPDATA%\NexusCode\config\bootstrap.json`:
 On the next launch the key is imported into the encrypted store, onboarding is skipped and the
 plaintext file is wiped. An existing stored key is never overwritten.
 
+**The agent shows the requirement analysis and then nothing happens**
+The endpoint accepted the request but returned no answer. Nexus Code now retries once and then tells
+you why. The usual causes:
+- *Reasoning model, low token ceiling* — the model spends its budget on internal reasoning and never
+  reaches an answer. Raise **Max tokens** in Settings to 16000 or more (this is now the default).
+- *No tool-calling support* — the model must support OpenAI-style function calling. Check the
+  provider's model card.
+- *Wrong base URL* — a host that answers 200 with a different payload shape yields empty replies.
+  Use *Test connection*.
+
 **Connection test fails**
 - 401/403 → wrong or unauthorised key.
 - 404 → wrong Base URL or model id. The app appends `/v1` only when the URL does not already end in a

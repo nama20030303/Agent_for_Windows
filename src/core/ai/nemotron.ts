@@ -5,10 +5,15 @@ export const NEMOTRON_MODEL = 'am/nemotron-3-ultra-550b-a55b';
 
 export const DEFAULT_AI_SETTINGS: AIProviderSettings = {
   provider: 'nemotron',
-  baseUrl: 'https://api.nemotron.ai/v1',
+  // No endpoint is guessed: the user supplies the OpenAI-compatible base URL of
+  // whichever host serves the model. Inventing a default only produces
+  // confusing DNS failures.
+  baseUrl: '',
   model: NEMOTRON_MODEL,
   temperature: 0.2,
-  maxTokens: 8192,
+  // Reasoning models spend tokens on an internal scratchpad before answering;
+  // a small ceiling makes them return nothing at all.
+  maxTokens: 16_384,
   timeoutMs: 180_000,
   streaming: true
 };

@@ -9,3 +9,4 @@ coverage/
 .tmp/
 agent-test-project/
 resources/bootstrap.json
+*.tsbuildinfo
