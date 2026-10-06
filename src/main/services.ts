@@ -64,6 +64,9 @@ export class AppServices {
   static async create(): Promise<AppServices> {
     const paths = resolveAppPaths();
     const settingsStore = new SettingsStore(paths.config);
+    // Pre-provisioned deployments: import a key supplied by the environment or a
+    // bootstrap file into the encrypted store before anything else runs.
+    settingsStore.bootstrapCredentials(process.resourcesPath);
     const db = await openDatabase(path.join(paths.database, 'nexus.db'));
     const services = new AppServices(paths, settingsStore, db);
     services.rebuildAgent();

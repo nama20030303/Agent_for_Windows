@@ -31,6 +31,12 @@ command is blocked by the classifier.
 `.env`, `*.pem`, `*.key`, `id_rsa`, `credentials`, `.npmrc` and similar files are redacted on read and
 skipped during context selection.
 
+**Pre-provisioning.** A deployment can supply the key without anyone typing it: `NEXUS_CODE_API_KEY`
+in the environment, or a `bootstrap.json` dropped into `%APPDATA%\NexusCode\config\`. On first launch
+the key is moved into the encrypted store and the plaintext file is overwritten and deleted. A key can
+also be baked into an installer from a CI secret — do this only for installers you distribute
+privately, because anyone who can download the binary can extract an embedded key.
+
 **Credential storage.** The provider API key is encrypted with Electron `safeStorage` (Windows DPAPI)
 in `%APPDATA%\NexusCode\config\credentials.bin`. It is never written to `settings.json`, never sent to
 the renderer, never logged and never placed in project files.

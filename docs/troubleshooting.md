@@ -4,6 +4,17 @@
 Settings → AI provider → paste the key → *Test connection*. The key is stored encrypted and is not
 readable by the UI afterwards.
 
+**Pre-configuring the key without the UI**
+Set `NEXUS_CODE_API_KEY` (optionally `NEXUS_CODE_BASE_URL`, `NEXUS_CODE_MODEL`) before launching, or
+create `%APPDATA%\NexusCode\config\bootstrap.json`:
+
+```json
+{ "apiKey": "sk-...", "baseUrl": "https://your-endpoint/v1", "model": "am/nemotron-3-ultra-550b-a55b" }
+```
+
+On the next launch the key is imported into the encrypted store, onboarding is skipped and the
+plaintext file is wiped. An existing stored key is never overwritten.
+
 **Connection test fails**
 - 401/403 → wrong or unauthorised key.
 - 404 → wrong Base URL or model id. The app appends `/v1` only when the URL does not already end in a

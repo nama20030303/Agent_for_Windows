@@ -6,6 +6,13 @@ directories:
 files:
   - out/**
   - package.json
+# Optional pre-provisioned credential, injected at build time from a CI secret.
+# Absent from normal builds; never committed to the repository.
+extraResources:
+  - from: resources
+    to: .
+    filter:
+      - bootstrap.json
 win:
   icon: resources/icon.ico
   target:

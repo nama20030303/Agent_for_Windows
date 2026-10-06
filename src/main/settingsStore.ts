@@ -5,6 +5,7 @@ import type { AppSettings } from '../core/shared/types.js';
 import { DEFAULT_AI_SETTINGS } from '../core/ai/nemotron.js';
 import { DEFAULT_CUSTOM_RULES } from '../core/permissions/permissionManager.js';
 import { createLogger } from '../core/shared/logger.js';
+import { describeBootstrap, resolveBootstrapCredentials, wipeBootstrapFile } from '../core/shared/bootstrap.js';
 
 const log = createLogger('settings');
 
@@ -118,5 +119,37 @@ export class SettingsStore {
 
   hasApiKey(): boolean {
     return !!this.getApiKey();
+  }
+
+  /** True when a key is present in the encrypted store (not merely in the environment). */
+  hasStoredApiKey(): boolean {
+    return fs.existsSync(this.keyFile);
+  }
+
+  /**
+   * Import a pre-provisioned credential on first launch so a deployed machine is
+   * ready to work without anyone typing a key into the UI.
+   *
+   * The key is moved into the OS-encrypted store and the plaintext source is wiped.
+   * An existing stored key is never overwritten.
+   */
+  bootstrapCredentials(resourcesDir?: string): boolean {
+    if (this.hasStoredApiKey()) return false;
+
+    const found = resolveBootstrapCredentials({ configDir: path.dirname(this.file), resourcesDir });
+    if (!found) return false;
+
+    if (!this.setApiKey(found.apiKey)) return false;
+
+    const ai = { ...this.settings.ai };
+    if (found.baseUrl) ai.baseUrl = found.baseUrl;
+    if (found.model) ai.model = found.model;
+    if (found.provider) ai.provider = found.provider as AppSettings['ai']['provider'];
+    this.settings = { ...this.settings, ai, onboardingComplete: true };
+    this.persist();
+
+    if (found.wipeAfterImport && found.filePath) wipeBootstrapFile(found.filePath);
+    log.info(describeBootstrap(found));
+    return true;
   }
 }
