@@ -7,7 +7,9 @@
   "license": "MIT",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=20.11" },
+  "engines": {
+    "node": ">=20.11"
+  },
   "scripts": {
     "dev": "electron-vite dev",
     "preview:web": "vite --config vite.web.config.ts",
@@ -15,7 +17,8 @@
     "build:win": "npm run build && electron-builder --win --x64",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "stage:credential": "node scripts/stage-embedded-credential.mjs"
   },
   "dependencies": {
     "diff": "^5.2.0",

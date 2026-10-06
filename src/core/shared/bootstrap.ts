@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { redactSecrets } from './secrets.js';
+import { deobfuscateSecret } from './obfuscate.js';
 
 /**
  * First-run credential bootstrap.
@@ -38,7 +39,10 @@ function readBootstrapFile(file: string, wipeAfterImport: boolean): BootstrapCre
   try {
     if (!fs.existsSync(file)) return null;
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
-    const apiKey = typeof parsed.apiKey === 'string' ? parsed.apiKey.trim() : '';
+    // `apiKeyEnc` is an obfuscated credential baked into a distributed build;
+    // `apiKey` is a plaintext one staged locally by an administrator.
+    const encoded = typeof parsed.apiKeyEnc === 'string' ? deobfuscateSecret(parsed.apiKeyEnc) : null;
+    const apiKey = (encoded ?? (typeof parsed.apiKey === 'string' ? parsed.apiKey : '')).trim();
     if (!apiKey) return null;
     return {
       apiKey,

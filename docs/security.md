@@ -31,6 +31,13 @@ command is blocked by the classifier.
 `.env`, `*.pem`, `*.key`, `id_rsa`, `credentials`, `.npmrc` and similar files are redacted on read and
 skipped during context selection.
 
+**Embedded credentials.** A build can ship with the key already inside it
+(`npm run stage:credential`, or the `NEXUS_API_KEY` repository secret in CI). The value is obfuscated
+with AES-256-GCM so it survives neither `strings` nor a secret scanner — but the derivation secret
+necessarily ships in the same binary, so **an embedded key must be considered disclosed to everyone
+who receives the installer**. CI therefore refuses to produce such a build from a public repository.
+Prefer the machine-local staging below, and rotate an embedded key when the audience changes.
+
 **Pre-provisioning.** A deployment can supply the key without anyone typing it: `NEXUS_CODE_API_KEY`
 in the environment, or a `bootstrap.json` dropped into `%APPDATA%\NexusCode\config\`. On first launch
 the key is moved into the encrypted store and the plaintext file is overwritten and deleted. A key can

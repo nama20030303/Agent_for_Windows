@@ -17,6 +17,19 @@ npm run build        # typecheck + production bundles into out/
 npm run build:win    # Windows NSIS installer → release/NexusCode-Setup-<version>.exe
 ```
 
+## Shipping a pre-provisioned build
+
+```bash
+NEXUS_API_KEY=sk-... node scripts/stage-embedded-credential.mjs \
+  --base-url https://provider.example/v1 --model am/nemotron-3-ultra-550b-a55b
+npm run build:win
+```
+
+This writes the git-ignored `resources/bootstrap.json`, which `electron-builder` copies into the
+installer; the first launch imports the key into the OS keystore. In CI the same thing happens
+automatically when a `NEXUS_API_KEY` secret exists — and the job fails if the repository is public,
+because the resulting binary would hand the key to anyone who downloads it.
+
 ## Layout rules
 
 - `src/core` must never import Electron — that is what keeps it testable.

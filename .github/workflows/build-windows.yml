@@ -20,6 +20,13 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      # Optional. When this secret exists the installer is built with the
+      # credential already inside it. Secrets cannot be read in a step `if:`,
+      # so it is lifted into the environment first.
+      NEXUS_API_KEY: ${{ secrets.NEXUS_API_KEY }}
+      NEXUS_BASE_URL: ${{ vars.NEXUS_BASE_URL }}
+      NEXUS_MODEL: ${{ vars.NEXUS_MODEL }}
     steps:
       - uses: actions/checkout@v4
 
@@ -36,6 +43,20 @@ jobs:
 
       - name: Test
         run: npm test
+
+      - name: Refuse to leak an embedded credential from a public repository
+        if: ${{ env.NEXUS_API_KEY != '' || hashFiles('resources/bootstrap.json') != '' }}
+        shell: pwsh
+        run: |
+          if ('${{ github.event.repository.private }}' -ne 'true') {
+            Write-Output "::error::This build would embed a provider credential, but the repository is public, so the installer and its artefacts would be downloadable by anyone. An embedded key can be extracted from any binary. Make the repository private, or remove the NEXUS_API_KEY secret."
+            exit 1
+          }
+          Write-Output 'Repository is private; an embedded credential is permitted.'
+
+      - name: Stage the embedded credential
+        if: ${{ env.NEXUS_API_KEY != '' }}
+        run: node scripts/stage-embedded-credential.mjs
 
       - name: Bundle main, preload and renderer
         run: npx electron-vite build
@@ -81,6 +102,8 @@ jobs:
           gh release create $tag (Get-ChildItem release/*.exe).FullName `
             --title "Nexus Code $version (build ${{ github.run_number }})" `
             --notes "Unsigned Windows x64 installer built from ``${{ github.sha }}``.
+
+          $(if (Test-Path resources/bootstrap.json) { 'This build ships a pre-provisioned API credential: it is ready to use on first launch, and must only be shared with people allowed to use that key.' } else { 'No credential is embedded: configure the provider on first launch.' })
 
           Windows SmartScreen will warn about an unknown publisher because the binary is not code-signed: choose **More info -> Run anyway**, or sign it with your own certificate." `
             --target ${{ github.sha }}
