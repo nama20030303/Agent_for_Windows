@@ -18,6 +18,20 @@ export function tempDir(prefix = 'nexus-test-'): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
+/**
+ * Remove a temporary workspace.
+ * On Windows a just-killed child process can still hold a handle on its working
+ * directory for a few milliseconds, so retry before giving up — and never fail a
+ * test because of cleanup.
+ */
+export function removeTempDir(target: string): void {
+  try {
+    fs.rmSync(target, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  } catch {
+    /* the OS will reclaim the temp directory */
+  }
+}
+
 export async function buildHarness(options: {
   provider: AIProvider;
   workspaceRoot: string;
@@ -66,7 +80,7 @@ export async function buildHarness(options: {
     cleanup: () => {
       processes.stopAll();
       db.close();
-      fs.rmSync(storage, { recursive: true, force: true });
+      removeTempDir(storage);
     }
   };
 }

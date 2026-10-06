@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { tempDir } from './helpers/harness.js';
+import { tempDir, removeTempDir } from './helpers/harness.js';
 import { AgentStateMachine, canTransition } from '../src/core/agent/stateMachine.js';
 import { TaskManager } from '../src/core/agent/taskManager.js';
 import { analyzeRequirements, confidenceByTopic } from '../src/core/agent/requirementAnalyzer.js';
@@ -25,7 +25,7 @@ afterEach(() => {
 
 function workspace(files: Record<string, string>): string {
   const root = tempDir('nexus-unit-');
-  cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+  cleanups.push(() => removeTempDir(root));
   for (const [rel, content] of Object.entries(files)) {
     const abs = path.join(root, rel);
     fs.mkdirSync(path.dirname(abs), { recursive: true });
@@ -252,7 +252,7 @@ describe('verification', () => {
 describe('persistence', () => {
   it('stores projects, sessions, messages, tasks and memory', async () => {
     const dir = tempDir('nexus-db-');
-    cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));
+    cleanups.push(() => removeTempDir(dir));
     const db = await openDatabase(path.join(dir, 'nexus.db'));
     const sessions = new SessionManager(db);
 
@@ -285,7 +285,7 @@ describe('persistence', () => {
   it('creates and restores checkpoints', async () => {
     const storage = tempDir('nexus-ckpt-');
     const root = workspace({ 'src/app.py': 'print("v1")\n' });
-    cleanups.push(() => fs.rmSync(storage, { recursive: true, force: true }));
+    cleanups.push(() => removeTempDir(storage));
     const db = await openDatabase(path.join(storage, 'nexus.db'));
     const manager = new CheckpointManager(db, path.join(storage, 'checkpoints'));
 

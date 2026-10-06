@@ -8,7 +8,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { MockProvider } from './helpers/mockProvider.js';
-import { buildHarness, tempDir } from './helpers/harness.js';
+import { buildHarness, tempDir, removeTempDir } from './helpers/harness.js';
 import type { AgentEvent } from '../src/core/shared/types.js';
 
 const shell = (process.platform === 'win32' ? 'powershell' : 'bash') as 'powershell' | 'bash';
@@ -90,7 +90,7 @@ if __name__ == "__main__":
 describe('acceptance scenario 1 — build, test, run and verify a new project', () => {
   it('creates a real application, runs its tests, starts it and verifies /health', async () => {
     const root = tempDir('nexus-accept-');
-    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    cleanups.push(() => removeTempDir(root));
 
     const provider = new MockProvider([
       {
@@ -159,7 +159,7 @@ describe('acceptance scenario 1 — build, test, run and verify a new project', 
 describe('acceptance scenario 2 — diagnose and fix a broken project', () => {
   it('finds the real cause of a startup failure, fixes it and verifies', async () => {
     const root = tempDir('nexus-broken-');
-    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    cleanups.push(() => removeTempDir(root));
     fs.mkdirSync(path.join(root, 'src'), { recursive: true });
     fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'broken', scripts: { test: 'node src/app.js' } }));
     fs.writeFileSync(path.join(root, 'src/app.js'), "const { greet } = require('./helpers/greeter.js');\nconsole.log(greet('world'));\n");
@@ -202,7 +202,7 @@ describe('acceptance scenario 2 — diagnose and fix a broken project', () => {
 describe('acceptance scenario 3 — incomplete request triggers bundled questions', () => {
   it('does not start coding and asks high-impact questions with recommendations', async () => {
     const root = tempDir('nexus-vague-');
-    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    cleanups.push(() => removeTempDir(root));
 
     // The deterministic pre-analysis alone must already identify the decisions.
     const { analyzeRequirements } = await import('../src/core/agent/requirementAnalyzer.js');
@@ -253,7 +253,7 @@ describe('acceptance scenario 3 — incomplete request triggers bundled question
 describe('acceptance scenario 8 — large projects are not sent to the model', () => {
   it('indexes thousands of files and sends only an index plus selected context', async () => {
     const root = tempDir('nexus-large-');
-    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    cleanups.push(() => removeTempDir(root));
     for (let d = 0; d < 20; d++) {
       const dir = path.join(root, `module_${d}`);
       fs.mkdirSync(dir, { recursive: true });

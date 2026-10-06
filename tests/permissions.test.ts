@@ -4,7 +4,7 @@ import path from 'node:path';
 import { PermissionManager } from '../src/core/permissions/permissionManager.js';
 import { createToolManager } from '../src/core/tools/index.js';
 import { ProcessManager } from '../src/core/process/processManager.js';
-import { tempDir } from './helpers/harness.js';
+import { tempDir, removeTempDir } from './helpers/harness.js';
 import type { ToolContext } from '../src/core/tools/types.js';
 import type { PermissionRequest } from '../src/core/shared/types.js';
 
@@ -24,7 +24,7 @@ beforeEach(() => {
     processManager: new ProcessManager()
   };
 });
-afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+afterEach(() => removeTempDir(root));
 
 describe('permission modes', () => {
   it('safe mode blocks all mutating tools', async () => {

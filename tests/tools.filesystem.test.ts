@@ -4,7 +4,7 @@ import path from 'node:path';
 import { createToolManager } from '../src/core/tools/index.js';
 import { PermissionManager } from '../src/core/permissions/permissionManager.js';
 import { ProcessManager } from '../src/core/process/processManager.js';
-import { tempDir } from './helpers/harness.js';
+import { tempDir, removeTempDir } from './helpers/harness.js';
 import type { ToolContext } from '../src/core/tools/types.js';
 
 let root: string;
@@ -27,7 +27,7 @@ beforeEach(() => {
   root = tempDir();
   ctx = context(root);
 });
-afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+afterEach(() => removeTempDir(root));
 
 describe('filesystem tools', () => {
   it('writes files atomically and reports a diff', async () => {
