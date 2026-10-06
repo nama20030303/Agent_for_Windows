@@ -37,10 +37,21 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Bundle main, preload and renderer
+        run: npx electron-vite build
+
       - name: Build Windows installer
-        run: npx electron-builder --win --x64 --publish never
+        shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          npx electron-builder --win --x64 --publish never 2>&1 | Tee-Object -FilePath builder.log
+          if ($LASTEXITCODE -ne 0) {
+            # Runner logs are not always reachable; surface the failure as an annotation.
+            $tail = (Get-Content builder.log -Tail 40) -join ' | '
+            Write-Output "::error::electron-builder failed: $tail"
+            exit 1
+          }
 
       - name: Collect artefacts
         shell: pwsh
