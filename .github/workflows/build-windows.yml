@@ -1,0 +1,75 @@
+name: Build Windows installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: Publish the installer as a GitHub release
+        type: boolean
+        default: true
+  push:
+    branches:
+      - 'arena/**'
+    paths-ignore:
+      - 'docs/**'
+      - 'README.md'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build Windows installer
+        run: npx electron-builder --win --x64 --publish never
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Collect artefacts
+        shell: pwsh
+        run: |
+          Get-ChildItem release -Filter *.exe | ForEach-Object {
+            "{0}  {1:N1} MB" -f $_.Name, ($_.Length / 1MB)
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NexusCode-Setup
+          path: |
+            release/*.exe
+            release/*.exe.blockmap
+            release/latest.yml
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish release
+        if: github.event_name == 'workflow_dispatch' && inputs.release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          $tag = "v$version-build.${{ github.run_number }}"
+          gh release create $tag (Get-ChildItem release/*.exe).FullName `
+            --title "Nexus Code $version (build ${{ github.run_number }})" `
+            --notes "Unsigned Windows x64 installer built from ``${{ github.sha }}``.
+
+          Windows SmartScreen will warn about an unknown publisher because the binary is not code-signed: choose **More info -> Run anyway**, or sign it with your own certificate." `
+            --target ${{ github.sha }}
