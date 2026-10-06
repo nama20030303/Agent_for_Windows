@@ -28,6 +28,7 @@ export default function App() {
   const state = useStore((s) => s);
   const conversation = useRef<HTMLDivElement>(null);
   const [recovery, setRecovery] = useState<{ id: string; title: string; state: string } | null>(null);
+  const [atBottom, setAtBottom] = useState(true);
 
   /* ------------------------------------------------------------ boot */
 
@@ -77,9 +78,27 @@ export default function App() {
     };
   }, []);
 
+  /**
+   * Follow the stream while the user is reading the newest output, but never
+   * yank the view away when they have scrolled up to read something. Streamed
+   * text changes the last turn without changing the turn count, so the whole
+   * conversation is watched, not just its length.
+   */
+  const last = state.turns.at(-1);
+  const watched = state.turns.length + (last?.kind === 'assistant' ? last.content.length : 0);
+
   useEffect(() => {
-    conversation.current?.scrollTo({ top: conversation.current.scrollHeight, behavior: 'smooth' });
-  }, [state.turns.length]);
+    if (!atBottom) return;
+    const el = conversation.current;
+    el?.scrollTo({ top: el.scrollHeight, behavior: state.busy ? 'auto' : 'smooth' });
+  }, [watched, atBottom, state.busy]);
+
+  const onConversationScroll = useCallback(() => {
+    const el = conversation.current;
+    if (!el) return;
+    // 48px of slack so a resting scroll position still counts as "at the bottom".
+    setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 48);
+  }, []);
 
   /* -------------------------------------------------------- actions */
 
@@ -261,7 +280,7 @@ export default function App() {
         <Sidebar onOpenFile={openFile} onNewSession={newSession} />
 
         <main className="center">
-          <div className="conversation" ref={conversation}>
+          <div className="conversation" ref={conversation} onScroll={onConversationScroll}>
             <div className="stream">
               {state.turns.length === 0 && (
                 <div style={{ paddingTop: 48, textAlign: 'center' }}>
@@ -352,6 +371,19 @@ export default function App() {
               })}
             </div>
           </div>
+
+          {!atBottom && (
+            <button
+              className="jump-latest"
+              onClick={() => {
+                const el = conversation.current;
+                el?.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+                setAtBottom(true);
+              }}
+            >
+              ↓ Jump to latest
+            </button>
+          )}
 
           {state.showTerminal && <TerminalPanel onClose={() => setState({ showTerminal: false })} />}
 
