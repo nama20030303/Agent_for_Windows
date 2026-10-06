@@ -79,6 +79,16 @@ npm run build:win      # produces release/NexusCode-Setup-<version>.exe
 On first launch, onboarding asks for the model endpoint and API key (*Test connection* verifies it),
 the project folder, and your permission mode.
 
+To skip onboarding on a machine you provision yourself, stage the credential once:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\provision-credentials.ps1
+```
+
+It writes `%APPDATA%\NexusCode\config\bootstrap.json`; the next launch imports the key into the
+DPAPI-encrypted store and deletes the plaintext file. `NEXUS_CODE_API_KEY` in the environment works
+too. A key is never read from the repository, and the published installer contains none.
+
 > `npm run preview:web` opens the interface in a browser without the desktop backend. It is explicitly
 > labelled **preview mode** and refuses to pretend that agent actions succeeded.
 
