@@ -64,6 +64,12 @@ export default function App() {
 
     off.push(api.events.onAgentEvent((event) => applyAgentEvent(event as AgentEvent)));
     off.push(api.events.onProcesses((processes) => setState({ processes: processes as ManagedProcess[] })));
+    off.push(
+      api.events.onSettingsChanged((next) => {
+        setState({ settings: next });
+        document.documentElement.dataset.theme = next.theme;
+      })
+    );
 
     return () => {
       disposed = true;

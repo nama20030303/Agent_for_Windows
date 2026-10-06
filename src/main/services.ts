@@ -10,6 +10,7 @@ import { ContextManager } from '../core/context/contextManager.js';
 import { ProcessManager } from '../core/process/processManager.js';
 import { VerificationEngine } from '../core/verification/verificationEngine.js';
 import { PermissionManager } from '../core/permissions/permissionManager.js';
+import { detectProvider } from '../core/ai/autoDetect.js';
 import { createToolManager } from '../core/tools/index.js';
 import { createProvider } from '../core/ai/index.js';
 import { AgentController } from '../core/agent/agentController.js';
@@ -88,6 +89,35 @@ export class AppServices {
   }
 
   /** Rebuilds the provider + agent after a settings change. */
+  private endpointResolution?: Promise<boolean>;
+
+  /**
+   * A build can ship with a key but no endpoint (the same model is served by
+   * several hosts). Work out which host owns the key instead of failing the
+   * user's first request. Runs at most once per process.
+   */
+  async ensureEndpoint(): Promise<boolean> {
+    const settings = this.settings();
+    if (settings.ai.baseUrl.trim()) return true;
+    if (!settings.ai.apiKey) return false;
+
+    this.endpointResolution ??= (async () => {
+      log.info('No endpoint configured; detecting the provider from the stored key');
+      const found = await detectProvider({ apiKey: settings.ai.apiKey!, model: settings.ai.model });
+      if (!found.ok || !found.best) {
+        log.warn('Provider detection did not find a host for this key', { message: found.message });
+        return false;
+      }
+      this.settingsStore.update({ ai: { ...settings.ai, baseUrl: found.best.baseUrl, model: found.best.model } });
+      this.rebuildAgent();
+      log.info('Provider detected', { baseUrl: found.best.baseUrl, model: found.best.model });
+      this.window?.webContents.send(IPC.eventSettingsChanged, this.settingsStore.public());
+      return true;
+    })();
+
+    return this.endpointResolution;
+  }
+
   rebuildAgent(): void {
     const settings = this.settings();
     this.permissions.setMode(settings.permissionMode);

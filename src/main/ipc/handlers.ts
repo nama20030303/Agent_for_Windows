@@ -173,6 +173,17 @@ export function registerIpc(services: AppServices, getWindow: () => BrowserWindo
     if (!services.workspace) return { accepted: false, reason: 'Open a project first.' };
     const settings = services.settings();
     if (!settings.ai.apiKey) return { accepted: false, reason: 'Configure the AI provider API key in Settings first.' };
+    if (!settings.ai.baseUrl.trim()) {
+      const resolved = await services.ensureEndpoint();
+      if (!resolved) {
+        return {
+          accepted: false,
+          reason:
+            'Could not work out which provider this API key belongs to. Open Settings, press ' +
+            '"Detect endpoint", or enter the base URL from your provider\'s documentation.'
+        };
+      }
+    }
 
     const running = services.agent.isRunning(input.sessionId);
     if (running) {

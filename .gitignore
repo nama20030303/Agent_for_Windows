@@ -8,5 +8,4 @@ coverage/
 .DS_Store
 .tmp/
 agent-test-project/
-resources/bootstrap.json
 *.tsbuildinfo

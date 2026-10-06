@@ -84,7 +84,12 @@ const previewApi: NexusApi = {
   processes: { list: async () => [], stop: async () => undefined, output: async () => [] },
   terminal: { run: notAvailable },
   verification: { detect: async () => [] },
-  events: { onAgentEvent: () => () => undefined, onProcesses: () => () => undefined, onLog: () => () => undefined },
+  events: {
+    onSettingsChanged: () => () => undefined,
+    onAgentEvent: () => () => undefined,
+    onProcesses: () => () => undefined,
+    onLog: () => () => undefined
+  },
   app: { version: async () => '0.1.0-preview', paths: async () => ({ appData: '—', logs: '—', database: '—' }) }
 };
 

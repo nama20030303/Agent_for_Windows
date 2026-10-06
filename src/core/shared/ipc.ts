@@ -118,6 +118,7 @@ export interface NexusApi {
     detect(): Promise<{ framework: string; test?: string; build?: string; lint?: string; cwd: string }[]>;
   };
   events: {
+    onSettingsChanged(handler: (settings: AppSettings) => void): () => void;
     onAgentEvent(handler: (event: AgentEvent) => void): () => void;
     onProcesses(handler: (processes: ManagedProcess[]) => void): () => void;
     onLog(handler: (record: { at: string; level: string; scope: string; message: string }) => void): () => void;
@@ -174,5 +175,6 @@ export const IPC = {
   appPaths: 'app:paths',
   eventAgent: 'event:agent',
   eventProcesses: 'event:processes',
-  eventLog: 'event:log'
+  eventLog: 'event:log',
+  eventSettingsChanged: 'event:settingsChanged'
 } as const;

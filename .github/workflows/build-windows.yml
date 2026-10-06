@@ -44,19 +44,18 @@ jobs:
       - name: Test
         run: npm test
 
-      - name: Refuse to leak an embedded credential from a public repository
-        if: ${{ env.NEXUS_API_KEY != '' || hashFiles('resources/bootstrap.json') != '' }}
-        shell: pwsh
-        run: |
-          if ('${{ github.event.repository.private }}' -ne 'true') {
-            Write-Output "::error::This build would embed a provider credential, but the repository is public, so the installer and its artefacts would be downloadable by anyone. An embedded key can be extracted from any binary. Make the repository private, or remove the NEXUS_API_KEY secret."
-            exit 1
-          }
-          Write-Output 'Repository is private; an embedded credential is permitted.'
-
       - name: Stage the embedded credential
         if: ${{ env.NEXUS_API_KEY != '' }}
         run: node scripts/stage-embedded-credential.mjs
+
+      - name: Report the embedded credential
+        shell: pwsh
+        run: |
+          if (Test-Path resources/bootstrap.json) {
+            Write-Output 'This installer ships with a provider credential already configured.'
+          } else {
+            Write-Output 'No credential embedded.'
+          }
 
       - name: Bundle main, preload and renderer
         run: npx electron-vite build

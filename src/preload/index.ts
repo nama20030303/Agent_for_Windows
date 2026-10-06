@@ -68,6 +68,11 @@ const api = {
     detect: () => ipcRenderer.invoke(IPC.verificationDetect)
   },
   events: {
+    onSettingsChanged: (handler: (settings: unknown) => void) => {
+      const listener = (_: unknown, settings: unknown) => handler(settings);
+      ipcRenderer.on(IPC.eventSettingsChanged, listener);
+      return () => ipcRenderer.removeListener(IPC.eventSettingsChanged, listener);
+    },
     onAgentEvent: (handler: (event: unknown) => void) => {
       const listener = (_e: unknown, payload: unknown) => handler(payload);
       ipcRenderer.on(IPC.eventAgent, listener);
