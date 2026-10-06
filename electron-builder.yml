@@ -1,0 +1,25 @@
+appId: ai.nexuscode.desktop
+productName: Nexus Code
+directories:
+  output: release
+  buildResources: resources
+files:
+  - out/**
+  - package.json
+win:
+  icon: resources/icon.ico
+  target:
+    - target: nsis
+      arch: [x64]
+  artifactName: NexusCode-Setup-${version}.${ext}
+nsis:
+  oneClick: false
+  installerIcon: resources/icon.ico
+  uninstallerIcon: resources/icon.ico
+  installerHeaderIcon: resources/icon.ico
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Nexus Code
+  deleteAppDataOnUninstall: false
