@@ -37,21 +37,6 @@ jobs:
       - name: Test
         run: npm test
 
-      - name: Pre-provision the provider credential (optional)
-        if: ${{ secrets.NEXUS_API_KEY != '' }}
-        shell: pwsh
-        env:
-          NEXUS_API_KEY: ${{ secrets.NEXUS_API_KEY }}
-          NEXUS_BASE_URL: ${{ vars.NEXUS_BASE_URL }}
-          NEXUS_MODEL: ${{ vars.NEXUS_MODEL }}
-        run: |
-          # The key is written only into the build workspace, never into the repository.
-          $payload = @{ apiKey = $env:NEXUS_API_KEY }
-          if ($env:NEXUS_BASE_URL) { $payload.baseUrl = $env:NEXUS_BASE_URL }
-          if ($env:NEXUS_MODEL)    { $payload.model   = $env:NEXUS_MODEL }
-          $payload | ConvertTo-Json | Set-Content resources/bootstrap.json -NoNewline
-          Write-Output "Installer will ship a pre-provisioned credential."
-
       - name: Bundle main, preload and renderer
         run: npx electron-vite build
 

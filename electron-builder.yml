@@ -6,8 +6,10 @@ directories:
 files:
   - out/**
   - package.json
-# Optional pre-provisioned credential, injected at build time from a CI secret.
-# Absent from normal builds; never committed to the repository.
+# Optional pre-provisioned credential for privately distributed builds: drop a
+# resources/bootstrap.json before packaging and the installer ships ready to use.
+# Never committed, and never added to public releases — an embedded key can be
+# extracted from any binary you hand out.
 extraResources:
   - from: resources
     to: .
