@@ -65,6 +65,8 @@ export interface AgentRunOptions {
 
 interface SessionRuntime {
   history: ChatMessage[];
+  /** Whether persisted turns from earlier runs have been replayed into history. */
+  restored: boolean;
   tasks: TaskManager;
   state: AgentStateMachine;
   abort?: AbortController;
@@ -84,6 +86,10 @@ interface SessionRuntime {
  * through the ToolManager, which enforces schema validation, security
  * validation and the permission system.
  */
+/** How many stored turns are replayed when a session is resumed. */
+const MAX_RECOVERED_TURNS = 40;
+const MAX_RECOVERED_ACTIONS = 40;
+
 const EMPTY_RESPONSE_NUDGE =
   'Your last reply contained no answer and no tool call. Put your answer in the normal response ' +
   'content (not in an internal reasoning field), or call a tool. Continue now.';
@@ -156,6 +162,7 @@ export class AgentController {
       const stored = this.deps.sessions.listTasks(options.sessionId);
       rt = {
         history: [],
+        restored: false,
         tasks: new TaskManager(options.sessionId, stored),
         state: new AgentStateMachine(this.deps.sessions.getAgentState(options.sessionId)?.state ?? 'IDLE'),
         repairAttempts: 0,
@@ -271,6 +278,7 @@ export class AgentController {
             toolCallId: call.id,
             content: this.deps.context.truncateToolResult(renderToolResult(outcome.result))
           });
+          this.persistAction(options.sessionId, call, outcome.result);
           if (outcome.pause) shouldPause = true;
           if (outcome.finish) finished = true;
         }
@@ -338,6 +346,14 @@ export class AgentController {
       rt.history[0] = { role: 'system', content: systemPrompt };
     }
 
+    // A runtime is created fresh after a restart, after release(), or when the
+    // user returns to an earlier session. Without this the model would answer
+    // with no memory of what was already said or done in that session.
+    if (!rt.restored) {
+      rt.restored = true;
+      for (const message of this.recoverTurns(options.sessionId)) rt.history.push(message);
+    }
+
     // Deterministic requirement pre-analysis (visible to the user and to the model).
     this.emitState(options.sessionId, 'ANALYZING_REQUIREMENTS', 'Analysing requirements');
     const analysis: RequirementAnalysis = analyzeRequirements({
@@ -359,6 +375,57 @@ export class AgentController {
 
     rt.history.push({ role: 'user', content: `${options.userMessage}\n\n${preAnalysis}` });
     this.deps.sessions.appendMessage({ sessionId: options.sessionId, role: 'user', content: options.userMessage });
+  }
+
+  /**
+   * Rebuild conversational context from the session store.
+   *
+   * User and assistant turns are replayed with their real roles. Tool results
+   * are not replayed as tool messages — their call ids no longer exist, and the
+   * provider would reject them — so they are folded into one compact note of
+   * what has already been done.
+   */
+  /** One durable line per tool call, so a resumed session knows what was already done. */
+  private persistAction(sessionId: string, call: ToolCall, result: ToolResult): void {
+    const target =
+      (typeof call.arguments.path === 'string' && call.arguments.path) ||
+      (typeof call.arguments.command === 'string' && call.arguments.command) ||
+      (typeof call.arguments.name === 'string' && call.arguments.name) ||
+      '';
+    const line = `${call.name}${target ? ` ${target}` : ''} → ${result.success ? 'ok' : `failed (${result.errorType ?? 'error'})`}`;
+    this.deps.sessions.appendMessage({ sessionId, role: 'tool', content: line.slice(0, 300) });
+  }
+
+  private recoverTurns(sessionId: string): ChatMessage[] {
+    const stored = this.deps.sessions.listMessages(sessionId);
+    if (!stored.length) return [];
+
+    const recent = stored.slice(-MAX_RECOVERED_TURNS);
+    const conversation: ChatMessage[] = [];
+    const actions: string[] = [];
+
+    for (const message of recent) {
+      if (message.role === 'user' || message.role === 'assistant') {
+        if (message.content.trim()) conversation.push({ role: message.role, content: message.content });
+      } else if (message.role === 'tool' || message.role === 'event') {
+        actions.push(message.content);
+      }
+    }
+
+    if (!conversation.length && !actions.length) return [];
+
+    const header: ChatMessage = {
+      role: 'system',
+      content:
+        'EARLIER TURNS IN THIS SESSION (recovered from storage). Treat them as what you and the user ' +
+        'already said. Verify the current state of the filesystem before relying on any of it.' +
+        (actions.length
+          ? `\n\nActions already performed:\n${actions.slice(-MAX_RECOVERED_ACTIONS).join('\n')}`
+          : '')
+    };
+
+    log.info('Recovered conversation context', { sessionId, turns: conversation.length, actions: actions.length });
+    return [header, ...conversation];
   }
 
   private async callModel(options: AgentRunOptions, rt: SessionRuntime, signal: AbortSignal) {
@@ -692,6 +759,7 @@ export class AgentController {
           const call: ToolCall = { id: raw.id, name: raw.name, arguments: safeParseArgs(raw.arguments) };
           const outcome = await this.dispatch(call, options, rt, abort.signal, maxRepairAttempts);
           rt.history.push({ role: 'tool', name: call.name, toolCallId: call.id, content: this.deps.context.truncateToolResult(renderToolResult(outcome.result)) });
+          this.persistAction(options.sessionId, call, outcome.result);
           if (outcome.pause) pause = true;
           if (outcome.finish) finished = true;
         }

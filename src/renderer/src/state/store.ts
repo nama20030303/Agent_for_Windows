@@ -232,3 +232,31 @@ export async function refreshGit(): Promise<void> {
     /* git is optional */
   }
 }
+
+/**
+ * Open a stored session and rebuild its transcript.
+ *
+ * Only real conversation turns are shown: persisted tool lines exist so a
+ * resumed agent knows what it already did, but replaying them as assistant
+ * messages would misrepresent them as things the agent said.
+ */
+export async function openSession(id: string, agentState?: AppState['agentState']): Promise<void> {
+  setState({
+    sessionId: id,
+    turns: [],
+    tasks: [],
+    timeline: [],
+    filesCreated: 0,
+    filesModified: 0,
+    ...(agentState ? { agentState } : {})
+  });
+
+  const [messages, tasks] = await Promise.all([api.session.messages(id), api.session.tasks(id)]);
+
+  setState({
+    tasks,
+    turns: messages
+      .filter((m) => m.role === 'user' || m.role === 'assistant')
+      .map((m, i) => ({ kind: m.role as 'user' | 'assistant', id: `stored-${id}-${i}`, content: m.content }))
+  });
+}

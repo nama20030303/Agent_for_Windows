@@ -6,6 +6,7 @@ import {
   getState,
   markPlanResolved,
   markQuestionAnswered,
+  openSession,
   refreshGit,
   setState,
   toast,
@@ -54,6 +55,10 @@ export default function App() {
           showOnboarding: isDesktop && (!settings.onboardingComplete || !hasApiKey)
         });
         if (workspace) void refreshGit();
+
+        // Continue where the user left off: without this, the first message after
+        // a restart silently started a brand-new session with no history at all.
+        if (sessions.length) await openSession(sessions[0].id, sessions[0].state as any);
 
         const interrupted = await api.session.interrupted();
         if (interrupted.length) setRecovery({ id: interrupted[0].id, title: interrupted[0].title, state: interrupted[0].state });
@@ -261,9 +266,7 @@ export default function App() {
             className="btn btn-sm"
             style={{ marginLeft: 10 }}
             onClick={async () => {
-              setState({ sessionId: recovery.id, turns: [], tasks: await api.session.tasks(recovery.id) });
-              const messages = await api.session.messages(recovery.id);
-              setState({ turns: messages.map((m, i) => ({ kind: m.role === 'user' ? 'user' : 'assistant', id: `h${i}`, content: m.content }) as any) });
+              await openSession(recovery.id);
               setRecovery(null);
               void send('Resume the interrupted task. First inspect the filesystem, git status and task state to confirm what actually completed, then continue.');
             }}

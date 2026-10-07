@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../bridge.js';
-import { getState, refreshGit, setState, toast, useStore } from '../state/store.js';
+import { getState, openSession, refreshGit, setState, toast, useStore } from '../state/store.js';
 import type { CheckpointDTO } from '../../../core/shared/ipc.js';
 import type { ProjectMemory } from '../../../core/shared/types.js';
 
@@ -342,13 +342,7 @@ export function Sidebar({ onOpenFile, onNewSession }: { onOpenFile: (path: strin
           <button
             key={s.id}
             className={`list-item ${s.id === sessionId ? 'active' : ''}`}
-            onClick={async () => {
-              setState({ sessionId: s.id, turns: [], tasks: await api.session.tasks(s.id), agentState: s.state as any });
-              const messages = await api.session.messages(s.id);
-              setState({
-                turns: messages.map((m, i) => ({ kind: m.role === 'user' ? 'user' : 'assistant', id: `h${i}`, content: m.content }) as any)
-              });
-            }}
+            onClick={() => void openSession(s.id, s.state as any)}
             title={s.title}
           >
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.title}</span>
