@@ -32,6 +32,28 @@ you why. The usual causes:
 - *Wrong base URL* — a host that answers 200 with a different payload shape yields empty replies.
   Use *Test connection*.
 
+**The agent explains the work instead of doing it, then says it finished**
+The model is not emitting tool calls, so nothing reaches the filesystem. Nexus Code no longer reports
+such a turn as completed: it asks the model once to use tools, then stops with **BLOCKED** and says
+so. Two ways forward:
+- *Preferred:* use a model your provider advertises with **function calling / tools**. Press
+  **Test connection** — it now probes a real tool call and tells you whether the endpoint supports it.
+- *Fallback:* the agent also accepts a textual call, so a model without native support can still act:
+  ```tool_call
+  { "tool": "write_file", "arguments": { "path": "snake.py", "content": "..." } }
+  ```
+  This is less reliable, since it depends on the model following the format.
+
+**The agent explains the work instead of doing it, then says it finished**
+The model is not emitting tool calls, so nothing reaches the filesystem. Nexus Code no longer reports
+such a turn as completed: it asks the model once to use tools, then stops with **BLOCKED** and says
+so. Two ways forward:
+- *Preferred:* use a model your provider advertises with **function calling / tools**. Press
+  **Test connection** — it now probes a real tool call and tells you whether the endpoint supports it.
+- *Fallback:* the agent also accepts a textual call, so a model without native support can still act:
+  a fenced `tool_call` block containing `{ "tool": "write_file", "arguments": { ... } }`.
+  This is less reliable, since it depends on the model following the format.
+
 **Connection test fails**
 - 401/403 → wrong or unauthorised key.
 - 404 → wrong Base URL or model id. The app appends `/v1` only when the URL does not already end in a

@@ -59,7 +59,14 @@ export interface AIProvider {
   settings: AIProviderSettings;
   sendMessage(request: ChatRequest): Promise<ChatResponse>;
   streamMessage(request: ChatRequest, handlers: StreamHandlers): Promise<ChatResponse>;
-  testConnection(): Promise<{ ok: boolean; message: string; modelAvailable?: boolean; models?: string[] }>;
+  testConnection(): Promise<{
+    ok: boolean;
+    message: string;
+    modelAvailable?: boolean;
+    models?: string[];
+    /** Whether the endpoint actually returned a native tool call when asked. */
+    toolCalling?: boolean;
+  }>;
   getModels(): Promise<string[]>;
   usage(): TokenUsage;
   /** Model and endpoint, for diagnostics. Never includes the API key. */

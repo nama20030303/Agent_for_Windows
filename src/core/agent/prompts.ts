@@ -46,6 +46,13 @@ WORKFLOW
 
 TOOL USE
 - Call one or a few tools per turn, then look at the results before continuing.
+- If your endpoint cannot emit native tool calls, write the call as a fenced block instead and nothing
+  else in that message:
+  \`\`\`tool_call
+  { "tool": "write_file", "arguments": { "path": "game/snake.py", "content": "..." } }
+  \`\`\`
+  The application executes it exactly like a native call. Writing code in a normal answer does NOT
+  create files: only tool calls change anything on the computer.
 - Use execute_command for one-shot commands; use start_process for servers and watchers.
 - Use edit_file for targeted changes and write_file for new files.
 - Paths are relative to the workspace root. Access outside the workspace is blocked.

@@ -274,7 +274,13 @@ export class OpenAICompatibleProvider implements AIProvider {
     }
   }
 
-  async testConnection(): Promise<{ ok: boolean; message: string; modelAvailable?: boolean; models?: string[] }> {
+  async testConnection(): Promise<{
+    ok: boolean;
+    message: string;
+    modelAvailable?: boolean;
+    models?: string[];
+    toolCalling?: boolean;
+  }> {
     if (!this.settings.baseUrl) return { ok: false, message: 'Base URL is not configured.' };
     try {
       const models = await this.getModels();
@@ -287,15 +293,60 @@ export class OpenAICompatibleProvider implements AIProvider {
         temperature: 0
       });
       const modelAvailable = models.length === 0 ? undefined : models.includes(this.settings.model);
+      const toolCalling = await this.probeToolCalling();
+
+      const reachable = response.content.trim() || (response.reasoning ? 'reasoning only' : 'empty content');
+      const toolNote =
+        toolCalling === true
+          ? 'Tool calling works.'
+          : toolCalling === false
+            ? 'This model did not return a tool call — the agent will fall back to textual calls, which is ' +
+              'less reliable. Prefer a model advertised with function calling.'
+            : 'Tool calling could not be verified.';
+
       return {
         ok: true,
-        message: `Connection successful. Model responded (${response.content.trim().slice(0, 40) || 'empty content'}).`,
+        message: `Connection successful. Model responded (${reachable}). ${toolNote}`,
         modelAvailable,
-        models
+        models,
+        toolCalling
       };
     } catch (err) {
       const e = err as AIProviderError;
       return { ok: false, message: e.message, models: [] };
+    }
+  }
+
+  /**
+   * Ask the model to make one trivial tool call. Whether it comes back decides
+   * if this endpoint can drive the agent natively — the single most important
+   * capability, and the one providers document least reliably.
+   */
+  private async probeToolCalling(): Promise<boolean | undefined> {
+    try {
+      const response = await this.sendMessage({
+        messages: [{ role: 'user', content: 'Call the tool `ping_probe` with value "x". Use the tool, do not answer in text.' }],
+        tools: [
+          {
+            name: 'ping_probe',
+            description: 'Connectivity probe. Call it with the given value.',
+            parameters: {
+              type: 'object',
+              properties: { value: { type: 'string', description: 'Any string' } },
+              required: ['value'],
+              additionalProperties: false
+            },
+            category: 'meta',
+            risk: 'SAFE',
+            mutating: false
+          }
+        ],
+        maxTokens: 256,
+        temperature: 0
+      });
+      return response.toolCalls.some((call) => call.name === 'ping_probe');
+    } catch {
+      return undefined;
     }
   }
 }

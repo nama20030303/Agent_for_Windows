@@ -33,6 +33,7 @@ import { nowIso, uid } from '../shared/ids.js';
 import { redactSecrets } from '../shared/secrets.js';
 import { AgentStateMachine } from './stateMachine.js';
 import { TaskManager } from './taskManager.js';
+import { extractTextToolCalls } from '../ai/toolCallFallback.js';
 import { analyzeRequirements } from './requirementAnalyzer.js';
 import { buildSystemPrompt } from './prompts.js';
 import type { ShellKind } from '../process/shell.js';
@@ -89,6 +90,11 @@ interface SessionRuntime {
 /** How many stored turns are replayed when a session is resumed. */
 const MAX_RECOVERED_TURNS = 40;
 const MAX_RECOVERED_ACTIONS = 40;
+
+const PROSE_ONLY_NUDGE =
+  'You described the work but called no tool, so nothing changed on the computer. Perform the work now ' +
+  'with tool calls. If your endpoint cannot emit native tool calls, reply with only a ```tool_call fenced ' +
+  'JSON block: { "tool": "<name>", "arguments": { ... } }.';
 
 const EMPTY_RESPONSE_NUDGE =
   'Your last reply contained no answer and no tool call. Put your answer in the normal response ' +
@@ -208,6 +214,7 @@ export class AgentController {
     const maxIterations = options.maxIterations ?? 40;
     const maxRepairAttempts = options.maxRepairAttempts ?? 5;
     let emptyResponses = 0;
+    let proseOnlyReplies = 0;
 
     try {
       const endpoint = this.deps.provider.describe();
@@ -228,6 +235,19 @@ export class AgentController {
         const response = await this.callModel(options, rt, abort.signal);
         if (abort.signal.aborted) break;
 
+        // Endpoints without native function calling: accept an explicit textual
+        // call so the agent can still act. Thinking models sometimes put it in
+        // the reasoning channel, so that is checked too.
+        if (response.toolCalls.length === 0) {
+          const fromText = extractTextToolCalls(response.content);
+          const found = fromText.calls.length ? fromText : extractTextToolCalls(response.reasoning ?? '');
+          if (found.calls.length) {
+            response.toolCalls = found.calls;
+            if (fromText.calls.length) response.content = found.cleaned;
+            this.timeline(options.sessionId, `Interpreted ${found.calls.length} textual tool call(s) from the model`);
+          }
+        }
+
         const content = response.content.trim();
         if (content) {
           this.emit({ type: 'assistant_message', sessionId: options.sessionId, content, final: response.toolCalls.length === 0 });
@@ -244,7 +264,32 @@ export class AgentController {
 
         if (response.toolCalls.length === 0) {
           if (content) {
-            // The model answered or asked in prose. That is a complete turn.
+            const executing = options.mode === 'agent' || options.mode === 'auto';
+            const asksSomething = /\?\s*$/.test(content);
+
+            // In an executing mode a prose answer means nothing was done. Saying
+            // "completed" there is exactly the fake success this agent must not
+            // produce. Nudge once, then stop and say plainly that it is stuck.
+            if (executing && !asksSomething && !rt.verified) {
+              if (proseOnlyReplies === 0) {
+                proseOnlyReplies += 1;
+                rt.history.push({ role: 'user', content: PROSE_ONLY_NUDGE });
+                this.timeline(options.sessionId, 'Model answered without acting; asking it to use tools');
+                continue;
+              }
+              this.emit({
+                type: 'error',
+                sessionId: options.sessionId,
+                message:
+                  'The model described the work instead of performing it, twice in a row, so nothing was ' +
+                  'changed on disk. Its endpoint most likely does not support tool calling. Check the ' +
+                  'provider\'s model card, or choose a model advertised with "Function Calling" / "Tools".'
+              });
+              this.emitState(options.sessionId, 'BLOCKED', 'The model is not calling tools.');
+              break;
+            }
+
+            // Chat, Plan, a question to the user, or work already verified.
             this.emitState(options.sessionId, 'COMPLETED', 'Response delivered');
             break;
           }
@@ -264,6 +309,7 @@ export class AgentController {
           break;
         }
         emptyResponses = 0;
+        proseOnlyReplies = 0;
 
         let shouldPause = false;
         let finished = false;
@@ -738,6 +784,7 @@ export class AgentController {
     const maxIterations = options.maxIterations ?? 40;
     const maxRepairAttempts = options.maxRepairAttempts ?? 5;
     let emptyResponses = 0;
+    let proseOnlyReplies = 0;
     try {
       for (let i = 0; i < maxIterations; i++) {
         if (abort.signal.aborted) break;

@@ -61,7 +61,13 @@ export interface NexusApi {
     update(patch: Partial<AppSettings>): Promise<AppSettings>;
     setApiKey(key: string): Promise<{ ok: boolean }>;
     hasApiKey(): Promise<boolean>;
-    testConnection(): Promise<{ ok: boolean; message: string; modelAvailable?: boolean; models?: string[] }>;
+    testConnection(): Promise<{
+      ok: boolean;
+      message: string;
+      modelAvailable?: boolean;
+      models?: string[];
+      toolCalling?: boolean;
+    }>;
     detectProvider(input: { apiKey?: string; model?: string }): Promise<DetectionResult>;
     setPermissionMode(mode: PermissionMode): Promise<void>;
   };

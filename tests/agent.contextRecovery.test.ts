@@ -26,9 +26,17 @@ describe('conversation context across turns', () => {
     const provider = new MockProvider([
       // Turn 1: the agent does something and answers.
       { content: 'Creating the game.', toolCalls: [{ name: 'write_file', arguments: { path: 'snake.py', content: 'print("snake")\n' } }] },
-      { content: 'Created snake.py with the game loop.' },
+      // A real agent turn ends by reporting through finish, not with bare prose:
+      // prose alone in agent mode is now treated as "nothing was done".
+      {
+        content: 'Created snake.py with the game loop.',
+        toolCalls: [{ name: 'finish', arguments: { report: 'Created snake.py', verified: false, success: true } }]
+      },
       // Turn 2 happens after the runtime has been thrown away.
-      { content: 'Added the score counter to the existing game.' }
+      {
+        content: 'Added the score counter to the existing game.',
+        toolCalls: [{ name: 'finish', arguments: { report: 'Score counter added', verified: false, success: true } }]
+      }
     ]);
 
     const harness = await buildHarness({ provider, workspaceRoot: root, permissionMode: 'autonomous', autoApprove: true });
