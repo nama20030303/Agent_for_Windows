@@ -226,6 +226,7 @@ export class AgentController {
     const maxRepairAttempts = options.maxRepairAttempts ?? 5;
     let emptyResponses = 0;
     let proseOnlyReplies = 0;
+    let invented = 0;
 
     try {
       const endpoint = this.deps.provider.describe();
@@ -252,11 +253,27 @@ export class AgentController {
         if (response.toolCalls.length === 0) {
           const names = this.deps.tools.definitions().map((d) => d.name);
           const fromText = extractTextToolCalls(response.content, names);
-          const found = fromText.calls.length ? fromText : extractTextToolCalls(response.reasoning ?? '', names);
+          const fromReasoning = fromText.calls.length ? null : extractTextToolCalls(response.reasoning ?? '', names);
+          const found = fromReasoning?.calls.length ? fromReasoning : fromText;
+          // Invented names from either channel: losing them would turn a
+          // correctable mistake into a dead run.
+          const unknownTools = [...new Set([...fromText.unknownTools, ...(fromReasoning?.unknownTools ?? [])])];
           if (found.calls.length) {
             response.toolCalls = found.calls;
             if (fromText.calls.length) response.content = found.cleaned;
             this.timeline(options.sessionId, `Interpreted ${found.calls.length} textual tool call(s) from the model`);
+          } else if (unknownTools.length && invented < 2) {
+            // It used the protocol correctly but invented a tool. Name the real
+            // ones and let it try again instead of failing the run.
+            invented += 1;
+            rt.history.push({
+              role: 'user',
+              content:
+                `There is no tool called ${unknownTools.map((n) => `\`${n}\``).join(', ')}. ` +
+                `The tools you can use are: ${names.join(', ')}. Repeat the call with the correct name.`
+            });
+            this.timeline(options.sessionId, `Model called an unknown tool (${unknownTools.join(', ')}); correcting it`);
+            continue;
           }
         }
 
@@ -289,13 +306,15 @@ export class AgentController {
                 this.timeline(options.sessionId, 'Model answered without acting; asking it to use tools');
                 continue;
               }
+              const sample = content.replace(/\s+/g, ' ').slice(0, 300);
               this.emit({
                 type: 'error',
                 sessionId: options.sessionId,
                 message:
-                  'The model kept describing the work instead of performing it, so nothing was changed on ' +
-                  'disk. The app already retried in compatibility mode, sending the tool list and the ' +
-                  'tool_call format in the prompt, and the model still did not follow it. This model is ' +
+                  `The model answered with text again ("${sample}${content.length > 300 ? '…' : ''}"), so nothing ` +
+                  'was changed on disk. ' +
+                  'The app had already retried in compatibility mode: tools described in the prompt, a worked ' +
+                  'example, and the block opened for it. The model still would not use it. This model is ' +
                   'too weak or too chatty to drive the agent: pick one advertised with "Function Calling" ' +
                   '/ "Tools", or raise "Max tokens" if its replies are being cut short. Chat and Plan ' +
                   'modes still work with it.'
@@ -804,6 +823,7 @@ export class AgentController {
     const maxRepairAttempts = options.maxRepairAttempts ?? 5;
     let emptyResponses = 0;
     let proseOnlyReplies = 0;
+    let invented = 0;
     try {
       for (let i = 0; i < maxIterations; i++) {
         if (abort.signal.aborted) break;

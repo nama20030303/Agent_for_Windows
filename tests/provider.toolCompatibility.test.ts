@@ -6,6 +6,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { OpenAICompatibleProvider } from '../src/core/ai/openaiCompatible.js';
 import { describeToolsAsText, withTextToolProtocol } from '../src/core/ai/textToolProtocol.js';
+import { extractTextToolCalls } from '../src/core/ai/toolCallFallback.js';
 import type { ToolDefinition } from '../src/core/shared/types.js';
 
 const realFetch = globalThis.fetch;
@@ -273,5 +274,86 @@ describe('endpoint that answers in prose instead of calling a tool', () => {
     const p = provider();
     await p.sendMessage({ messages: [{ role: 'user', content: 'go' }], tools: [writeFile], requireToolCall: true });
     expect(bodies).toHaveLength(1);
+  });
+});
+
+describe('the escalation ladder', () => {
+  const PROSE = { choices: [{ message: { content: 'I would write snake.py like this...' }, finish_reason: 'stop' }] };
+
+  it('adds a worked example in compatibility mode', async () => {
+    const bodies: any[] = [];
+    globalThis.fetch = vi.fn(async (_u: any, init: any) => {
+      bodies.push(JSON.parse(init.body));
+      return jsonResponse(bodies.length === 1 ? PROSE : TEXT_CALL);
+    }) as any;
+
+    await provider().sendMessage({
+      messages: [{ role: 'system', content: 'sys' }, { role: 'user', content: 'go' }],
+      tools: [writeFile],
+      requireToolCall: true
+    });
+
+    const roles = bodies[1].messages.map((m: any) => m.role);
+    expect(roles.slice(0, 5)).toEqual(['system', 'user', 'assistant', 'user', 'assistant']);
+    expect(bodies[1].messages[2].content).toContain('```tool_call');
+  });
+
+  it('forces the block open when even the example is ignored, and repairs the prefill', async () => {
+    const bodies: any[] = [];
+    globalThis.fetch = vi.fn(async (_u: any, init: any) => {
+      bodies.push(JSON.parse(init.body));
+      if (bodies.length < 3) return jsonResponse(PROSE);
+      // Prefilled with '{', so the model continues the object.
+      return jsonResponse({
+        choices: [{ message: { content: '"tool": "write_file", "arguments": {"path": "a.py", "content": "x"}}' }, finish_reason: 'stop' }]
+      });
+    }) as any;
+
+    const p = provider();
+    const response = await p.sendMessage({
+      messages: [{ role: 'system', content: 'sys' }, { role: 'user', content: 'go' }],
+      tools: [writeFile],
+      requireToolCall: true
+    });
+
+    expect(bodies).toHaveLength(3);
+    expect(bodies[2].messages.at(-1)).toEqual({ role: 'assistant', content: '```tool_call\n{' });
+    // The caller can parse it: the opening brace is back.
+    expect(response.content.startsWith('{')).toBe(true);
+    expect(extractTextToolCalls(response.content, ['write_file']).calls[0].name).toBe('write_file');
+  });
+
+  it('reads the legacy function_call shape as a real tool call', async () => {
+    globalThis.fetch = (async () =>
+      jsonResponse({
+        choices: [
+          { message: { content: '', function_call: { name: 'write_file', arguments: '{"path":"a.py"}' } }, finish_reason: 'function_call' }
+        ]
+      })) as any;
+
+    const response = await provider().sendMessage({ messages: [{ role: 'user', content: 'go' }], tools: [writeFile] });
+    expect(response.toolCalls).toHaveLength(1);
+    expect(response.toolCalls[0].name).toBe('write_file');
+  });
+});
+
+describe('endpoints that reject a trailing assistant message', () => {
+  it('keeps the run alive instead of failing the request', async () => {
+    let n = 0;
+    globalThis.fetch = vi.fn(async (_u: any, init: any) => {
+      n += 1;
+      const body = JSON.parse(init.body);
+      if (body.messages.at(-1).role === 'assistant') return new Response('prefill not allowed', { status: 400 });
+      return jsonResponse({ choices: [{ message: { content: 'I would write the file.' }, finish_reason: 'stop' }] });
+    }) as any;
+
+    const response = await provider().sendMessage({
+      messages: [{ role: 'user', content: 'go' }],
+      tools: [writeFile],
+      requireToolCall: true
+    });
+
+    expect(n).toBe(3);
+    expect(response.content).toContain('I would write the file.');
   });
 });

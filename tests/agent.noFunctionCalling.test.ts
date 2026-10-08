@@ -171,3 +171,68 @@ describe('forgiving parsing of a sloppy model', () => {
     expect(extractTextToolCalls('```json\n{"path":"a.py","content":"x"}\n```', tools).calls).toHaveLength(0);
   });
 });
+
+describe('meeting the model halfway', () => {
+  const tools = ['write_file', 'read_file', 'execute_command', 'list_directory', 'finish'];
+
+  it('accepts the names models reach for instead of the real ones', () => {
+    const alias = (name: string) =>
+      extractTextToolCalls('```tool_call\n' + JSON.stringify({ tool: name, arguments: {} }) + '\n```', tools).calls[0]?.name;
+    expect(alias('create_file')).toBe('write_file');
+    expect(alias('run_command')).toBe('execute_command');
+    expect(alias('ls')).toBe('list_directory');
+    expect(alias('done')).toBe('finish');
+    // An alias is never preferred over a real tool of that name.
+    expect(alias('read_file')).toBe('read_file');
+  });
+
+  it('reads a block the model never closed', () => {
+    const { calls } = extractTextToolCalls(
+      'Writing it now.\n```tool_call\n{"tool": "write_file", "arguments": {"path": "a.py", "content": "x"}}',
+      tools
+    );
+    expect(calls[0].name).toBe('write_file');
+  });
+
+  it('reports an invented tool name instead of silently dropping the call', () => {
+    const result = extractTextToolCalls('```tool_call\n{"tool": "summon_dragon", "arguments": {}}\n```', tools);
+    expect(result.calls).toHaveLength(0);
+    expect(result.unknownTools).toEqual(['summon_dragon']);
+  });
+});
+
+describe('a model that invents a tool name mid-run', () => {
+  it('is told the real names and the run still succeeds', async () => {
+    const root = tempDir('nexus-unknown-tool-');
+    cleanups.push(() => removeTempDir(root));
+
+    const block = (call: unknown) => '```tool_call\n' + JSON.stringify(call) + '\n```';
+    const provider = new MockProvider([
+      { content: 'Writing it.\n\n' + block({ tool: 'file_creator_9000', arguments: { path: 'a.py' } }) },
+      { content: 'Sorry.\n\n' + block({ tool: 'write_file', arguments: { path: 'a.py', content: 'print(1)\n' } }) },
+      { content: 'Done.\n\n' + block({ tool: 'finish', arguments: { report: 'Created a.py', success: true, verified: false } }) }
+    ]);
+
+    const harness = await buildHarness({ provider, workspaceRoot: root, permissionMode: 'autonomous', autoApprove: true });
+    cleanups.push(harness.cleanup);
+
+    await harness.agent.run({
+      sessionId: harness.sessionId,
+      projectId: harness.projectId,
+      workspaceRoot: root,
+      mode: 'agent',
+      shell: 'bash',
+      userMessage: 'create a.py'
+    });
+
+    expect(fs.existsSync(path.join(root, 'a.py'))).toBe(true);
+    // The mock keeps a reference to the live history array, so inspect all of it.
+    const history = provider.requests[0].messages;
+    const correction = history.find((m) => m.content.includes('There is no tool called'));
+    expect(correction, 'the model must be told which tools exist').toBeTruthy();
+    expect(correction!.content).toContain('`file_creator_9000`');
+    expect(correction!.content).toContain('write_file');
+    const states = harness.events.filter((e) => e.type === 'agent_state_change').map((e: any) => e.state);
+    expect(states).toContain('COMPLETED');
+  }, 30_000);
+});

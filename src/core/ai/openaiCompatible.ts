@@ -8,7 +8,7 @@ import {
   type StreamHandlers
 } from './provider.js';
 import { createLogger } from '../shared/logger.js';
-import { withTextToolProtocol } from './textToolProtocol.js';
+import { withForcedBlock, withTextToolProtocol } from './textToolProtocol.js';
 import { extractTextToolCalls } from './toolCallFallback.js';
 
 const log = createLogger('ai');
@@ -42,6 +42,9 @@ export function mapHttpError(status: number, body: string): AIProviderError {
       return new AIProviderError(`Unexpected provider response ${status}: ${snippet}`, status, status >= 500, 'unknown');
   }
 }
+
+/** How a single HTTP attempt asks for a tool call. */
+type WireMode = 'native' | 'text' | 'forced';
 
 function toWireMessages(messages: ChatMessage[]): unknown[] {
   return messages.map((m) => {
@@ -96,18 +99,21 @@ export function hideToolBlocks(handlers: StreamHandlers): StreamHandlers {
  */
 function retryRequest(request: ChatRequest, previous: ChatResponse): ChatRequest {
   const attempt = previous.content.trim();
-  const messages = [...request.messages];
-  if (attempt) {
-    messages.push({ role: 'assistant', content: attempt.slice(0, 2000) });
-    messages.push({
-      role: 'user',
-      content:
-        'That reply changed nothing on the computer, because describing an action does not perform it. ' +
-        'This endpoint has no native function calling, so use the tool protocol from the system prompt: ' +
-        'reply with one fenced tool_call block containing a single JSON object and nothing else after it.'
-    });
-  }
-  return { ...request, messages };
+  if (!attempt) return request;
+  return {
+    ...request,
+    messages: [
+      ...request.messages,
+      { role: 'assistant', content: attempt.slice(0, 2000) },
+      {
+        role: 'user',
+        content:
+          'That reply changed nothing on the computer, because describing an action does not perform it. ' +
+          'This endpoint has no native function calling, so use the tool protocol from the system prompt: ' +
+          'reply with one fenced tool_call block containing a single JSON object, exactly like the example.'
+      }
+    ]
+  };
 }
 
 function toWireTools(tools: ToolDefinition[]): unknown[] {
@@ -231,11 +237,13 @@ export class OpenAICompatibleProvider implements AIProvider {
     throw lastError ?? new AIProviderError('Request failed.', undefined, false, 'unknown');
   }
 
-  private body(request: ChatRequest, stream: boolean, textMode: boolean): string {
+  private body(request: ChatRequest, stream: boolean, mode: WireMode): string {
+    const textMode = mode !== 'native';
     const useTools = !textMode && !!request.tools?.length;
-    const messages = textMode && request.tools?.length
+    let messages = textMode && request.tools?.length
       ? withTextToolProtocol(request.messages, request.tools)
       : request.messages;
+    if (mode === 'forced') messages = withForcedBlock(messages);
     return JSON.stringify({
       model: this.settings.model,
       messages: toWireMessages(messages),
@@ -252,8 +260,9 @@ export class OpenAICompatibleProvider implements AIProvider {
    * telling us it cannot handle `tools`. Rather than reporting a dead end,
    * drop the parameter, describe the tools in the prompt and try once more.
    */
-  private needsTextProtocol(request: ChatRequest, response: ChatResponse): boolean {
-    if (!request.tools?.length || this.nativeTools === 'no') return false;
+  /** The turn produced nothing the application can run. */
+  private lacksCall(request: ChatRequest, response: ChatResponse): boolean {
+    if (!request.tools?.length) return false;
     if (response.toolCalls.length) return false;
     // A truncated reply says nothing about capability; it is a budget problem.
     if (response.finishReason === 'length') return false;
@@ -265,7 +274,26 @@ export class OpenAICompatibleProvider implements AIProvider {
     // usable call the endpoint is fine as it is; otherwise this model is not
     // going to emit native calls, so stop asking it to.
     if (!request.requireToolCall) return false;
-    return extractTextToolCalls(response.content).calls.length === 0;
+    return this.textCalls(request, response.content) === 0;
+  }
+
+  private needsTextProtocol(request: ChatRequest, response: ChatResponse): boolean {
+    return this.nativeTools !== 'no' && this.lacksCall(request, response);
+  }
+
+  private textCalls(request: ChatRequest, content: string): number {
+    return extractTextToolCalls(content, request.tools?.map((t) => t.name)).calls.length;
+  }
+
+  /**
+   * The model was prefilled with an open brace, so its continuation is the
+   * rest of the JSON. Put the brace back before anyone tries to parse it.
+   */
+  private repairPrefilled(request: ChatRequest, response: ChatResponse): ChatResponse {
+    if (this.textCalls(request, response.content)) return response;
+    const patched = `{${response.content.trimStart()}`;
+    if (!this.textCalls(request, patched)) return response;
+    return { ...response, content: patched };
   }
 
   private noteCapability(request: ChatRequest, response: ChatResponse): void {
@@ -273,23 +301,42 @@ export class OpenAICompatibleProvider implements AIProvider {
   }
 
   async sendMessage(request: ChatRequest): Promise<ChatResponse> {
-    const first = await this.sendOnce(request, this.usesTextToolProtocol);
-    if (!this.needsTextProtocol(request, first)) {
+    const first = await this.sendOnce(request, this.usesTextToolProtocol ? 'text' : 'native');
+    if (!this.lacksCall(request, first)) {
       this.noteCapability(request, first);
       return first;
     }
+
+    // Step 2: describe the tools in the prompt, show a worked example, and
+    // show the model its own failed attempt.
+    const wasNative = this.nativeTools !== 'no';
     this.nativeTools = 'no';
-    log.warn('Endpoint produced no tool call; switching to the textual tool protocol', {
-      model: this.settings.model,
-      hadContent: !!first.content.trim()
-    });
-    return this.sendOnce(retryRequest(request, first), true);
+    if (wasNative) {
+      log.warn('Endpoint produced no tool call; switching to the textual tool protocol', {
+        model: this.settings.model,
+        hadContent: !!first.content.trim()
+      });
+    }
+    const second = await this.sendOnce(retryRequest(request, first), 'text');
+    if (!this.lacksCall(request, second)) return second;
+
+    // Step 3: open the block for it and let it only finish the JSON.
+    log.warn('Still no tool call in compatibility mode; forcing the block open', { model: this.settings.model });
+    try {
+      const third = await this.sendOnce(retryRequest(request, second), 'forced');
+      return this.repairPrefilled(request, third);
+    } catch (err) {
+      // Not every endpoint accepts a trailing assistant message. Falling back
+      // to the previous answer keeps the run alive and reportable.
+      log.warn('Forced-block attempt rejected by the endpoint', { reason: (err as Error).message });
+      return second;
+    }
   }
 
-  private async sendOnce(request: ChatRequest, textMode: boolean): Promise<ChatResponse> {
+  private async sendOnce(request: ChatRequest, mode: WireMode): Promise<ChatResponse> {
     const res = await this.fetchWithRetry(
       this.url('/chat/completions'),
-      { method: 'POST', headers: this.headers(), body: this.body(request, false, textMode) },
+      { method: 'POST', headers: this.headers(), body: this.body(request, false, mode) },
       request.signal
     );
     let json: any;
@@ -306,6 +353,17 @@ export class OpenAICompatibleProvider implements AIProvider {
       name: t.function?.name ?? '',
       arguments: t.function?.arguments ?? '{}'
     }));
+    // Pre-2023-11 shape, still emitted by several gateways and by llama.cpp.
+    if (!toolCalls.length && message.function_call?.name) {
+      toolCalls.push({
+        id: 'call_0',
+        name: message.function_call.name,
+        arguments:
+          typeof message.function_call.arguments === 'string'
+            ? message.function_call.arguments
+            : JSON.stringify(message.function_call.arguments ?? {})
+      });
+    }
     this.tokens.requests += 1;
     this.tokens.inputTokens += json?.usage?.prompt_tokens ?? 0;
     this.tokens.outputTokens += json?.usage?.completion_tokens ?? 0;
@@ -320,8 +378,8 @@ export class OpenAICompatibleProvider implements AIProvider {
   }
 
   async streamMessage(request: ChatRequest, handlers: StreamHandlers): Promise<ChatResponse> {
-    const first = await this.streamOnce(request, handlers, this.usesTextToolProtocol);
-    if (!this.needsTextProtocol(request, first)) {
+    const first = await this.streamOnce(request, handlers, this.usesTextToolProtocol ? 'text' : 'native');
+    if (!this.lacksCall(request, first)) {
       this.noteCapability(request, first);
       return first;
     }
@@ -330,19 +388,29 @@ export class OpenAICompatibleProvider implements AIProvider {
       model: this.settings.model,
       hadContent: !!first.content.trim()
     });
-    // The retry replaces the answer, so tell the UI to start the message over.
+    // Each retry replaces the answer, so the UI must drop what it has shown.
     handlers.onRestart?.();
-    return this.streamOnce(retryRequest(request, first), handlers, true);
+    const second = await this.streamOnce(retryRequest(request, first), handlers, 'text');
+    if (!this.lacksCall(request, second)) return second;
+
+    handlers.onRestart?.();
+    try {
+      const third = await this.streamOnce(retryRequest(request, second), handlers, 'forced');
+      return this.repairPrefilled(request, third);
+    } catch (err) {
+      log.warn('Forced-block attempt rejected by the endpoint', { reason: (err as Error).message });
+      return second;
+    }
   }
 
-  private async streamOnce(request: ChatRequest, handlers: StreamHandlers, textMode: boolean): Promise<ChatResponse> {
-    if (textMode) handlers = hideToolBlocks(handlers);
+  private async streamOnce(request: ChatRequest, handlers: StreamHandlers, mode: WireMode): Promise<ChatResponse> {
+    if (mode !== 'native') handlers = hideToolBlocks(handlers);
     const res = await this.fetchWithRetry(
       this.url('/chat/completions'),
       {
         method: 'POST',
         headers: { ...this.headers(), Accept: 'text/event-stream' },
-        body: this.body(request, true, textMode)
+        body: this.body(request, true, mode)
       },
       request.signal
     );
@@ -390,6 +458,12 @@ export class OpenAICompatibleProvider implements AIProvider {
             // never forward it to the UI.
             const reasoningDelta = readReasoning(delta);
             if (reasoningDelta) reasoning += reasoningDelta;
+            if (delta.function_call?.name || delta.function_call?.arguments) {
+              const existing = partials.get(0) ?? { id: 'call_0', name: '', arguments: '' };
+              if (delta.function_call.name) existing.name = delta.function_call.name;
+              if (typeof delta.function_call.arguments === 'string') existing.arguments += delta.function_call.arguments;
+              partials.set(0, existing);
+            }
             for (const tc of delta.tool_calls ?? []) {
               const index = tc.index ?? 0;
               const existing = partials.get(index) ?? { id: tc.id ?? `call_${index}`, name: '', arguments: '' };

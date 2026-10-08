@@ -55,6 +55,57 @@ const CODE_LANGUAGES = new Set([
   'rb'
 ]);
 
+/**
+ * Names models reach for instead of the real ones. Accepted only when the
+ * alias is not itself a tool and the target is.
+ */
+const ALIASES: Record<string, string> = {
+  create_file: 'write_file',
+  new_file: 'write_file',
+  save_file: 'write_file',
+  writefile: 'write_file',
+  write: 'write_file',
+  update_file: 'edit_file',
+  modify_file: 'edit_file',
+  apply_patch: 'edit_file',
+  patch_file: 'edit_file',
+  open_file: 'read_file',
+  view_file: 'read_file',
+  cat: 'read_file',
+  readfile: 'read_file',
+  run_command: 'execute_command',
+  shell: 'execute_command',
+  bash: 'execute_command',
+  powershell: 'execute_command',
+  terminal: 'execute_command',
+  command: 'execute_command',
+  run: 'execute_command',
+  list_files: 'list_directory',
+  ls: 'list_directory',
+  dir: 'list_directory',
+  mkdir: 'create_directory',
+  create_folder: 'create_directory',
+  remove_file: 'delete_file',
+  rm: 'delete_file',
+  grep: 'search_text',
+  search: 'search_text',
+  test: 'run_tests',
+  run_test: 'run_tests',
+  build: 'run_build',
+  ask: 'ask_user',
+  question: 'ask_user',
+  done: 'finish',
+  complete: 'finish',
+  finish_task: 'finish'
+};
+
+function canonicalName(name: string, known?: Set<string>): string | null {
+  if (!known) return name;
+  if (known.has(name)) return name;
+  const alias = ALIASES[name.toLowerCase()];
+  return alias && known.has(alias) ? alias : null;
+}
+
 const FENCE = /```([a-zA-Z0-9_+-]*)[ \t]*\r?\n([\s\S]*?)```/g;
 const TOOL_NAME = /^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$/;
 
@@ -114,7 +165,16 @@ function parseLoosely(raw: string): any {
   }
 }
 
-function readCall(raw: string, index: number, known?: Set<string>): RawToolCall | null {
+/** A parsed block that names a tool nobody has, so the model can be told. */
+export interface UnknownToolCall {
+  unknown: string;
+}
+
+function isUnknown(value: unknown): value is UnknownToolCall {
+  return !!value && typeof value === 'object' && 'unknown' in (value as object);
+}
+
+function readCall(raw: string, index: number, known?: Set<string>): RawToolCall | UnknownToolCall | null {
   let parsed = parseLoosely(raw);
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
 
@@ -127,9 +187,10 @@ function readCall(raw: string, index: number, known?: Set<string>): RawToolCall 
     }
   }
 
-  const name = parsed.tool ?? parsed.name ?? parsed.function?.name ?? parsed.tool_name ?? parsed.action;
-  if (typeof name !== 'string' || !TOOL_NAME.test(name)) return null;
-  if (known && !known.has(name)) return null;
+  const raw_name = parsed.tool ?? parsed.name ?? parsed.function?.name ?? parsed.tool_name ?? parsed.action;
+  if (typeof raw_name !== 'string' || !TOOL_NAME.test(raw_name)) return null;
+  const name = canonicalName(raw_name, known);
+  if (!name) return { unknown: raw_name };
 
   const args =
     parsed.arguments ?? parsed.args ?? parsed.parameters ?? parsed.params ?? parsed.input ?? parsed.function?.arguments ?? {};
@@ -182,6 +243,8 @@ export interface TextToolCallExtraction {
   calls: RawToolCall[];
   /** The message with the call blocks removed, so the user does not see raw JSON. */
   cleaned: string;
+  /** Tool names the model invented. Reported back so it can correct itself. */
+  unknownTools: string[];
 }
 
 /**
@@ -189,11 +252,23 @@ export interface TextToolCallExtraction {
  *        This is what makes scanning unfenced text safe.
  */
 export function extractTextToolCalls(content: string, knownTools?: Iterable<string>): TextToolCallExtraction {
-  if (!content || !content.includes('{')) return { calls: [], cleaned: content ?? '' };
+  if (!content || !content.includes('{')) return { calls: [], cleaned: content ?? '', unknownTools: [] };
 
   const known = knownTools ? new Set(knownTools) : undefined;
   const calls: RawToolCall[] = [];
+  const unknownTools: string[] = [];
   const remove: string[] = [];
+
+  const accept = (result: RawToolCall | UnknownToolCall | null, block: string): boolean => {
+    if (!result) return false;
+    if (isUnknown(result)) {
+      if (!unknownTools.includes(result.unknown)) unknownTools.push(result.unknown);
+      return false;
+    }
+    calls.push(result);
+    remove.push(block);
+    return true;
+  };
 
   // 1. Fenced blocks, skipping anything that is plainly source code.
   let outsideFences = '';
@@ -205,13 +280,16 @@ export function extractTextToolCalls(content: string, knownTools?: Iterable<stri
     const language = match[1].toLowerCase();
     if (CODE_LANGUAGES.has(language)) continue;
 
-    const call = readCall(match[2], calls.length, known);
-    if (call) {
-      calls.push(call);
-      remove.push(match[0]);
-    }
+    accept(readCall(match[2], calls.length, known), match[0]);
   }
   outsideFences += content.slice(cursor);
+
+  // A block the model never closed, because it ran out of tokens or simply
+  // forgot the closing fence.
+  if (!calls.length) {
+    const open = content.match(/```(?:tool_call|tool|json)?[ \t]*\r?\n([\s\S]*)$/);
+    if (open && !open[1].includes('```')) accept(readCall(open[1], 0, known), open[0]);
+  }
 
   // 2. A JSON object written without a fence, anywhere in the message. Only
   //    accepted when the tool name is known, so prose can never be mistaken
@@ -219,27 +297,17 @@ export function extractTextToolCalls(content: string, knownTools?: Iterable<stri
   if (!calls.length && known) {
     for (const span of jsonSpans(outsideFences)) {
       const text = outsideFences.slice(span.start, span.end);
-      const call = readCall(text, calls.length, known);
-      if (call) {
-        calls.push(call);
-        remove.push(text);
-      }
+      accept(readCall(text, calls.length, known), text);
     }
   }
 
   // 3. The whole message is one JSON object (no fence, no tool list).
   if (!calls.length && !known) {
     const trimmed = content.trim();
-    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
-      const call = readCall(trimmed, 0, known);
-      if (call) {
-        calls.push(call);
-        remove.push(trimmed);
-      }
-    }
+    if (trimmed.startsWith('{') && trimmed.endsWith('}')) accept(readCall(trimmed, 0, known), trimmed);
   }
 
   let cleaned = content;
   for (const block of remove) cleaned = cleaned.replace(block, '');
-  return { calls, cleaned: cleaned.trim() };
+  return { calls, cleaned: cleaned.trim(), unknownTools };
 }

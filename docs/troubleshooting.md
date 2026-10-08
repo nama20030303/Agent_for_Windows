@@ -33,6 +33,19 @@ you why. The usual causes:
   Use *Test connection*.
 
 **The agent explains the work instead of doing it**
+The app escalates on its own, inside a single turn:
+1. normal request with native function calling;
+2. if no call comes back, the tools and the `tool_call` format go into the prompt together with a
+   worked example exchange, the model is shown its own failed answer and asked again;
+3. if it still will not comply, the block is opened for it (`\`\`\`tool_call` + `{`) so the only thing
+   left to produce is the JSON.
+Replies are parsed leniently — raw newlines inside strings, trailing commas, a missing closing fence,
+wrapper objects, the legacy `function_call` field — and common wrong names (`create_file`,
+`run_command`, `ls`, `done`) are mapped to the real tools. If the model invents a name that cannot be
+mapped, it is told which tools exist and asked to repeat the call. Only after all of that does a run
+stop as BLOCKED, and the message then quotes what the model actually said.
+
+**Old note: the agent explains the work instead of doing it**
 Handled automatically. When a reply in Agent or Auto mode contains no tool call, the app assumes the
 endpoint cannot do function calling: it drops the `tools` parameter, puts the tool list and the
 `tool_call` format into the prompt, shows the model its own failed attempt and retries. From then on

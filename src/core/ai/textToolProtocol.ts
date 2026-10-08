@@ -30,6 +30,26 @@ function describeParameters(tool: ToolDefinition): string {
     .join(', ');
 }
 
+/**
+ * A worked example as a real exchange. Weak models imitate the last assistant
+ * turn far more reliably than they follow an instruction, so compatibility
+ * mode shows them one instead of only describing the format.
+ */
+export function toolProtocolExample(): ChatMessage[] {
+  return [
+    { role: 'user', content: 'Create a file hello.txt containing the word hi.' },
+    {
+      role: 'assistant',
+      content: ['Creating it.', '', '```tool_call', '{"tool": "write_file", "arguments": {"path": "hello.txt", "content": "hi"}}', '```'].join('\n')
+    },
+    { role: 'user', content: 'Tool result: write_file ok (hello.txt, 2 bytes).' },
+    {
+      role: 'assistant',
+      content: ['The file exists now.', '', '```tool_call', '{"tool": "finish", "arguments": {"report": "Created hello.txt", "success": true, "verified": true}}', '```'].join('\n')
+    }
+  ];
+}
+
 export function describeToolsAsText(tools: ToolDefinition[]): string {
   const lines = tools.map((tool) => {
     const description = tool.description.replace(/\s+/g, ' ').trim().slice(0, MAX_DESCRIPTION);
@@ -70,7 +90,28 @@ export function withTextToolProtocol(messages: ChatMessage[], tools: ToolDefinit
 
   if (firstSystem >= 0) {
     copy[firstSystem] = { ...copy[firstSystem], content: `${copy[firstSystem].content}\n\n${protocol}` };
+    // The example goes straight after the system prompt, before the real
+    // conversation, so it reads as settled history rather than a request.
+    copy.splice(firstSystem + 1, 0, ...toolProtocolExample());
     return copy;
   }
-  return [{ role: 'system', content: protocol }, ...copy];
+  return [{ role: 'system', content: protocol }, ...toolProtocolExample(), ...copy];
+}
+
+/**
+ * Last resort: open the fenced block for the model and let it only complete
+ * the JSON. An endpoint that honours assistant prefill cannot answer with
+ * prose after this; one that ignores it is no worse off.
+ */
+export function withForcedBlock(messages: ChatMessage[]): ChatMessage[] {
+  return [
+    ...messages,
+    {
+      role: 'user',
+      content:
+        'Reply with the tool_call block only. No explanation, no code fence other than tool_call, ' +
+        'nothing before or after it.'
+    },
+    { role: 'assistant', content: '```tool_call\n{' }
+  ];
 }
