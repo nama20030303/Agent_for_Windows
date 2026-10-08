@@ -357,3 +357,80 @@ describe('endpoints that reject a trailing assistant message', () => {
     expect(response.content).toContain('I would write the file.');
   });
 });
+
+describe('an endpoint that answers with silence', () => {
+  const SILENT = { choices: [{ message: { content: '' }, finish_reason: 'stop' }] };
+  const OK = { choices: [{ message: { content: 'ready' }, finish_reason: 'stop' }] };
+
+  it('omits max_tokens entirely when the setting is 0', async () => {
+    const bodies: any[] = [];
+    globalThis.fetch = vi.fn(async (_u: any, init: any) => {
+      bodies.push(JSON.parse(init.body));
+      return jsonResponse(OK);
+    }) as any;
+
+    const p = new OpenAICompatibleProvider({
+      provider: 'openai-compatible',
+      baseUrl: 'https://example.invalid/v1',
+      model: 'm',
+      temperature: 0.2,
+      maxTokens: 0,
+      timeoutMs: 5000,
+      streaming: false,
+      apiKey: 'sk'
+    } as any);
+    await p.sendMessage({ messages: [{ role: 'user', content: 'hi' }] });
+
+    expect('max_tokens' in bodies[0]).toBe(false);
+  });
+
+  it('retries without the token limit, then with a smaller payload', async () => {
+    const history = Array.from({ length: 20 }, (_, i) => ({ role: 'user' as const, content: `message ${i}` }));
+    const bodies: any[] = [];
+    globalThis.fetch = vi.fn(async (_u: any, init: any) => {
+      bodies.push(JSON.parse(init.body));
+      return jsonResponse(bodies.length < 3 ? SILENT : OK);
+    }) as any;
+
+    const p = provider();
+    const response = await p.sendMessage({ messages: [{ role: 'system', content: 'sys' }, ...history] });
+
+    expect(bodies).toHaveLength(3);
+    expect(bodies[0].max_tokens).toBe(1024);
+    expect('max_tokens' in bodies[1], 'second attempt drops the limit').toBe(false);
+    expect(bodies[2].messages.length).toBeLessThan(bodies[1].messages.length);
+    expect(bodies[2].messages[0].role).toBe('system');
+    expect(response.content).toBe('ready');
+
+    // Both discoveries stick, so the next turn is answered first time.
+    bodies.length = 0;
+    await p.sendMessage({ messages: [{ role: 'user', content: 'again' }] });
+    expect(bodies).toHaveLength(1);
+    expect('max_tokens' in bodies[0]).toBe(false);
+    expect(p.describe().maxTokensOmitted).toBe(true);
+    expect(p.describe().payloadReduced).toBe(true);
+  });
+
+  it('keeps only the essential tools when it shrinks the request', async () => {
+    const extras = Array.from({ length: 12 }, (_, i) => ({ ...writeFile, name: `obscure_tool_${i}` }));
+    const bodies: any[] = [];
+    globalThis.fetch = vi.fn(async (_u: any, init: any) => {
+      bodies.push(JSON.parse(init.body));
+      return jsonResponse(bodies.length < 4 ? SILENT : OK);
+    }) as any;
+
+    const p = provider();
+    await p.sendMessage({
+      messages: [{ role: 'system', content: 'sys' }, { role: 'user', content: 'go' }],
+      tools: [writeFile, ...extras],
+      requireToolCall: true
+    });
+
+    // With tools in play the cheaper fix comes first: the textual protocol.
+    expect(bodies[0].tools).toBeTruthy();
+    expect(bodies[1].tools).toBeUndefined();
+    // Then the token limit, then the reduced payload.
+    expect('max_tokens' in bodies[2]).toBe(false);
+    expect(bodies[3].messages.length).toBeLessThanOrEqual(bodies[2].messages.length);
+  });
+});

@@ -83,5 +83,13 @@ export interface AIProvider {
   getModels(): Promise<string[]>;
   usage(): TokenUsage;
   /** Model and endpoint, for diagnostics. Never includes the API key. */
-  describe(): { model: string; baseUrl: string; nativeToolCalls?: 'unknown' | 'yes' | 'no' };
+  describe(): {
+    model: string;
+    baseUrl: string;
+    nativeToolCalls?: 'unknown' | 'yes' | 'no';
+    /** The endpoint only answers when max_tokens is left out. */
+    maxTokensOmitted?: boolean;
+    /** The endpoint only answers to a trimmed-down request. */
+    payloadReduced?: boolean;
+  };
 }

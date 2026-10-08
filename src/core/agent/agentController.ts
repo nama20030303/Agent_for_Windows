@@ -106,39 +106,44 @@ const EMPTY_RESPONSE_NUDGE =
  */
 export function diagnoseEmptyResponse(
   response: { content: string; reasoning?: string; finishReason: string },
-  provider: { model: string; baseUrl: string; nativeToolCalls?: 'unknown' | 'yes' | 'no' }
+  provider: {
+    model: string;
+    baseUrl: string;
+    nativeToolCalls?: 'unknown' | 'yes' | 'no';
+    maxTokensOmitted?: boolean;
+    payloadReduced?: boolean;
+  }
 ): string {
   const where = `Model \`${provider.model}\` at \`${provider.baseUrl || '(no endpoint configured)'}\``;
-
-  // The provider already retried without the `tools` parameter and described
-  // the tools in the prompt instead, so function calling is not the cause.
-  if (provider.nativeToolCalls === 'no') {
-    return (
-      `${where} returned nothing even after the app switched to its text-only compatibility mode ` +
-      `(finish reason: ${response.finishReason}). The endpoint is reachable, so the likely causes are a ` +
-      'too-small "Max tokens" for a reasoning model, or a model name the provider routes nowhere. ' +
-      'Raise "Max tokens" to 16000 or more, then use "Test connection" and try a different model.'
-    );
-  }
 
   if (response.finishReason === 'length') {
     return (
       `${where} hit its output token limit before producing an answer. ` +
-      'Raise "Max tokens" in Settings (reasoning models need 16000 or more), or pick a smaller request.'
+      'Raise "Max tokens" in Settings, or set it to 0 to remove the limit entirely.'
     );
   }
   if (response.reasoning) {
     return (
       `${where} replied with internal reasoning only and no answer or tool call. ` +
-      'This usually means the endpoint streams a thinking model that needs a higher token limit, ' +
-      'or that it does not support tool calling. Raise "Max tokens", and verify the model supports ' +
-      'OpenAI-style function calling.'
+      'The model is thinking but never committing to an answer. Set "Max tokens" to 0 (no limit) so it ' +
+      'can finish, and prefer a model that supports function calling.'
     );
   }
+
+  // Everything the app already tried on its own, so the advice does not repeat it.
+  const tried = [
+    provider.nativeToolCalls === 'no' ? 'without the tools parameter' : null,
+    provider.maxTokensOmitted ? 'without any max_tokens limit' : null,
+    provider.payloadReduced ? 'with a reduced prompt and fewer tools' : null
+  ].filter(Boolean) as string[];
+
+  const already = tried.length ? ` The app already retried ${tried.join(', ')}, and the reply was still empty.` : '';
+
   return (
-    `${where} returned an empty response (finish reason: ${response.finishReason}). ` +
-    'Check in Settings that the base URL points at an OpenAI-compatible /chat/completions endpoint ' +
-    'and that the model name is exactly the one the provider exposes, then use "Test connection".'
+    `${where} returned an empty response (finish reason: ${response.finishReason}).${already} ` +
+    'The endpoint answers but produces no text, which almost always means the model name is routed ' +
+    'nowhere by the provider. Open Settings, press "Test connection" to list the models the endpoint ' +
+    'actually exposes, and pick one of those.'
   );
 }
 

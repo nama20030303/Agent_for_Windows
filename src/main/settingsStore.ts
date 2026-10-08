@@ -28,6 +28,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
  */
 export class SettingsStore {
   private settings: AppSettings;
+  /** Names of the one-off corrections already applied to the stored file. */
+  private migrations: string[] = [];
   private readonly file: string;
   private readonly keyFile: string;
 
@@ -41,12 +43,14 @@ export class SettingsStore {
     try {
       if (fs.existsSync(this.file)) {
         const parsed = JSON.parse(fs.readFileSync(this.file, 'utf8'));
-        return {
+        const settings: AppSettings = {
           ...DEFAULT_SETTINGS,
           ...parsed,
           ai: { ...DEFAULT_SETTINGS.ai, ...(parsed.ai ?? {}), apiKey: undefined },
           customPermissions: { ...DEFAULT_SETTINGS.customPermissions, ...(parsed.customPermissions ?? {}) }
         };
+        this.migrations = Array.isArray(parsed.migrations) ? [...parsed.migrations] : [];
+        return SettingsStore.migrateOnce(settings, this.migrations);
       }
     } catch (err) {
       log.warn('Could not read settings, using defaults', { reason: (err as Error).message });
@@ -54,9 +58,26 @@ export class SettingsStore {
     return { ...DEFAULT_SETTINGS };
   }
 
+  /**
+   * One-off corrections applied to settings written by an older build. Each
+   * one records itself so a deliberate choice by the user is never overridden
+   * twice.
+   */
+  private static migrateOnce(settings: AppSettings, applied: string[]): AppSettings {
+    // Reasoning models spend an unpredictable share of their budget thinking,
+    // and some gateways answer with nothing when max_tokens exceeds the
+    // model's own limit. The old default of 8192/16384 caused both. 0 removes
+    // the field from the request entirely.
+    if (!applied.includes('unlimited-tokens') && settings.ai.maxTokens > 0) {
+      settings = { ...settings, ai: { ...settings.ai, maxTokens: 0 } };
+      applied.push('unlimited-tokens');
+    }
+    return settings;
+  }
+
   private persist(): void {
     const { ai, ...rest } = this.settings;
-    const safe = { ...rest, ai: { ...ai, apiKey: undefined } };
+    const safe = { ...rest, ai: { ...ai, apiKey: undefined }, migrations: this.migrations };
     const tmp = `${this.file}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(safe, null, 2));
     fs.renameSync(tmp, this.file);

@@ -76,7 +76,19 @@ so. Two ways forward:
   a fenced `tool_call` block containing `{ "tool": "write_file", "arguments": { ... } }`.
   This is less reliable, since it depends on the model following the format.
 
-**The provider returns an empty response**
+**The provider answers with silence**
+The app looks for a request shape the endpoint will answer, in this order, and remembers what worked:
+1. the textual tool protocol (when tools were in play);
+2. the same request with **no `max_tokens` field at all** — several gateways return an empty
+   completion when the value is above what the model allows;
+3. a reduced request: system prompt, the last few messages and only the essential tools.
+
+**Max tokens** is now **0 by default, meaning no limit**: a reasoning model spends an unpredictable
+share of its budget thinking, and a limit that is too low (or too high for the gateway) is the most
+common reason for an empty answer. Existing installs are migrated to 0 once; set a number if you
+want a hard cap.
+
+**Old note: the provider returns an empty response**
 Nexus Code now handles the most common cause itself: some endpoints accept the `tools` parameter and
 then reply with nothing. When that happens the app drops `tools`, describes them inside the prompt and
 retries, driving the model through its textual `tool_call` protocol for the rest of the session. You

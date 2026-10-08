@@ -116,6 +116,37 @@ function retryRequest(request: ChatRequest, previous: ChatResponse): ChatRequest
   };
 }
 
+/** The tools a coding run cannot do without, in priority order. */
+const CORE_TOOLS = [
+  'finish',
+  'write_file',
+  'read_file',
+  'edit_file',
+  'list_directory',
+  'execute_command',
+  'run_tests',
+  'ask_user'
+];
+
+/**
+ * The smallest request that can still do the job: the system prompt, the tail
+ * of the conversation and only the essential tools. Used when an endpoint
+ * answers a full request with silence.
+ */
+function shrinkRequest(request: ChatRequest): ChatRequest {
+  const system = request.messages.filter((m) => m.role === 'system').slice(0, 1);
+  const rest = request.messages.filter((m) => m.role !== 'system');
+  // Never start the tail on a tool result: it would have no call to belong to.
+  let tail = rest.slice(-6);
+  while (tail.length && tail[0].role === 'tool') tail = tail.slice(1);
+
+  const tools = request.tools?.length
+    ? request.tools.filter((t) => CORE_TOOLS.includes(t.name))
+    : request.tools;
+
+  return { ...request, messages: [...system, ...tail], tools: tools?.length ? tools : request.tools };
+}
+
 function toWireTools(tools: ToolDefinition[]): unknown[] {
   return tools.map((t) => ({
     type: 'function',
@@ -166,13 +197,31 @@ export class OpenAICompatibleProvider implements AIProvider {
    */
   private nativeTools: 'unknown' | 'yes' | 'no' = 'unknown';
 
+  /** Set when the endpoint only answers if max_tokens is left out entirely. */
+  private omitMaxTokens = false;
+
+  /** Set when it only answers to a small payload (few tools, short history). */
+  private reducedPayload = false;
+
   constructor(
     public settings: AIProviderSettings,
     private retry: RetryOptions = { retries: 3, baseDelayMs: 800 }
   ) {}
 
-  describe(): { model: string; baseUrl: string; nativeToolCalls?: 'unknown' | 'yes' | 'no' } {
-    return { model: this.settings.model, baseUrl: this.settings.baseUrl, nativeToolCalls: this.nativeTools };
+  describe(): {
+    model: string;
+    baseUrl: string;
+    nativeToolCalls?: 'unknown' | 'yes' | 'no';
+    maxTokensOmitted?: boolean;
+    payloadReduced?: boolean;
+  } {
+    return {
+      model: this.settings.model,
+      baseUrl: this.settings.baseUrl,
+      nativeToolCalls: this.nativeTools,
+      maxTokensOmitted: this.omitMaxTokens,
+      payloadReduced: this.reducedPayload
+    };
   }
 
   /** True once the endpoint has been shown not to support function calling. */
@@ -237,6 +286,17 @@ export class OpenAICompatibleProvider implements AIProvider {
     throw lastError ?? new AIProviderError('Request failed.', undefined, false, 'unknown');
   }
 
+  /**
+   * `undefined` removes the field from the payload entirely, which is both the
+   * "no limit" setting and the recovery for endpoints that answer with nothing
+   * when max_tokens exceeds what the model allows.
+   */
+  private tokenBudget(request: ChatRequest): number | undefined {
+    if (this.omitMaxTokens) return undefined;
+    const value = request.maxTokens ?? this.settings.maxTokens;
+    return value && value > 0 ? value : undefined;
+  }
+
   private body(request: ChatRequest, stream: boolean, mode: WireMode): string {
     const textMode = mode !== 'native';
     const useTools = !textMode && !!request.tools?.length;
@@ -250,7 +310,7 @@ export class OpenAICompatibleProvider implements AIProvider {
       tools: useTools ? toWireTools(request.tools!) : undefined,
       tool_choice: useTools ? 'auto' : undefined,
       temperature: request.temperature ?? this.settings.temperature,
-      max_tokens: request.maxTokens ?? this.settings.maxTokens,
+      max_tokens: this.tokenBudget(request),
       stream
     });
   }
@@ -281,6 +341,50 @@ export class OpenAICompatibleProvider implements AIProvider {
     return this.nativeTools !== 'no' && this.lacksCall(request, response);
   }
 
+  /** Nothing usable at all: no answer, no reasoning, no call. */
+  private isSilent(response: ChatResponse): boolean {
+    return !response.content.trim() && !response.reasoning?.trim() && response.toolCalls.length === 0;
+  }
+
+  /**
+   * Run one attempt, and if the endpoint says literally nothing, find a shape
+   * of request it will answer. Both discoveries stick for the session.
+   */
+  private async attempt(request: ChatRequest, mode: WireMode, handlers?: StreamHandlers): Promise<ChatResponse> {
+    const run = (req: ChatRequest) =>
+      handlers ? this.streamOnce(req, handlers, mode) : this.sendOnce(req, mode);
+
+    const shaped = this.reducedPayload ? shrinkRequest(request) : request;
+    const first = await run(shaped);
+    if (!this.isSilent(first)) return first;
+
+    // A silent reply to a tools request is most often the tools parameter
+    // itself. Let the caller try the textual protocol before reshaping the
+    // request, so the cheaper and more likely fix is attempted first.
+    if (mode === 'native' && request.tools?.length) return first;
+
+    // A. The token budget may exceed what this model accepts.
+    if (!this.omitMaxTokens && this.tokenBudget(request) !== undefined) {
+      this.omitMaxTokens = true;
+      log.warn('Empty reply; retrying without max_tokens', { model: this.settings.model });
+      handlers?.onRestart?.();
+      const retry = await run(shaped);
+      if (!this.isSilent(retry)) return retry;
+    }
+
+    // B. The payload may simply be too big for the endpoint to handle.
+    if (!this.reducedPayload) {
+      log.warn('Empty reply; retrying with a reduced payload', { model: this.settings.model });
+      handlers?.onRestart?.();
+      const retry = await run(shrinkRequest(request));
+      if (!this.isSilent(retry)) {
+        this.reducedPayload = true;
+        return retry;
+      }
+    }
+    return first;
+  }
+
   private textCalls(request: ChatRequest, content: string): number {
     return extractTextToolCalls(content, request.tools?.map((t) => t.name)).calls.length;
   }
@@ -301,7 +405,7 @@ export class OpenAICompatibleProvider implements AIProvider {
   }
 
   async sendMessage(request: ChatRequest): Promise<ChatResponse> {
-    const first = await this.sendOnce(request, this.usesTextToolProtocol ? 'text' : 'native');
+    const first = await this.attempt(request, this.usesTextToolProtocol ? 'text' : 'native');
     if (!this.lacksCall(request, first)) {
       this.noteCapability(request, first);
       return first;
@@ -317,13 +421,13 @@ export class OpenAICompatibleProvider implements AIProvider {
         hadContent: !!first.content.trim()
       });
     }
-    const second = await this.sendOnce(retryRequest(request, first), 'text');
+    const second = await this.attempt(retryRequest(request, first), 'text');
     if (!this.lacksCall(request, second)) return second;
 
     // Step 3: open the block for it and let it only finish the JSON.
     log.warn('Still no tool call in compatibility mode; forcing the block open', { model: this.settings.model });
     try {
-      const third = await this.sendOnce(retryRequest(request, second), 'forced');
+      const third = await this.attempt(retryRequest(request, second), 'forced');
       return this.repairPrefilled(request, third);
     } catch (err) {
       // Not every endpoint accepts a trailing assistant message. Falling back
@@ -378,7 +482,7 @@ export class OpenAICompatibleProvider implements AIProvider {
   }
 
   async streamMessage(request: ChatRequest, handlers: StreamHandlers): Promise<ChatResponse> {
-    const first = await this.streamOnce(request, handlers, this.usesTextToolProtocol ? 'text' : 'native');
+    const first = await this.attempt(request, this.usesTextToolProtocol ? 'text' : 'native', handlers);
     if (!this.lacksCall(request, first)) {
       this.noteCapability(request, first);
       return first;
@@ -390,12 +494,12 @@ export class OpenAICompatibleProvider implements AIProvider {
     });
     // Each retry replaces the answer, so the UI must drop what it has shown.
     handlers.onRestart?.();
-    const second = await this.streamOnce(retryRequest(request, first), handlers, 'text');
+    const second = await this.attempt(retryRequest(request, first), 'text', handlers);
     if (!this.lacksCall(request, second)) return second;
 
     handlers.onRestart?.();
     try {
-      const third = await this.streamOnce(retryRequest(request, second), handlers, 'forced');
+      const third = await this.attempt(retryRequest(request, second), 'forced', handlers);
       return this.repairPrefilled(request, third);
     } catch (err) {
       log.warn('Forced-block attempt rejected by the endpoint', { reason: (err as Error).message });

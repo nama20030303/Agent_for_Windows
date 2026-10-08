@@ -13,7 +13,10 @@ export const DEFAULT_AI_SETTINGS: AIProviderSettings = {
   temperature: 0.2,
   // Reasoning models spend tokens on an internal scratchpad before answering;
   // a small ceiling makes them return nothing at all.
-  maxTokens: 16_384,
+  // 0 removes max_tokens from the request: a reasoning model spends an
+  // unpredictable amount of its budget thinking, and several gateways answer
+  // with nothing at all when the value exceeds what the model allows.
+  maxTokens: 0,
   timeoutMs: 180_000,
   streaming: true
 };

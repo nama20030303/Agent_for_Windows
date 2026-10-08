@@ -79,8 +79,8 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               <input type="number" step="0.1" min="0" max="2" value={draft.ai.temperature} onChange={(e) => setDraft({ ...draft, ai: { ...draft.ai, temperature: Number(e.target.value) } })} />
             </div>
             <div className="field" style={{ flex: 1 }}>
-              <label>Max tokens</label>
-              <input type="number" value={draft.ai.maxTokens} onChange={(e) => setDraft({ ...draft, ai: { ...draft.ai, maxTokens: Number(e.target.value) } })} />
+              <label title="0 sends no limit at all, so the provider uses the model's maximum.">Max tokens (0 = no limit)</label>
+              <input type="number" min="0" value={draft.ai.maxTokens} onChange={(e) => setDraft({ ...draft, ai: { ...draft.ai, maxTokens: Math.max(0, Number(e.target.value)) } })} />
             </div>
             <div className="field" style={{ flex: 1 }}>
               <label>Timeout (ms)</label>
