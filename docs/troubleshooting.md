@@ -54,6 +54,15 @@ so. Two ways forward:
   a fenced `tool_call` block containing `{ "tool": "write_file", "arguments": { ... } }`.
   This is less reliable, since it depends on the model following the format.
 
+**The provider returns an empty response**
+Nexus Code now handles the most common cause itself: some endpoints accept the `tools` parameter and
+then reply with nothing. When that happens the app drops `tools`, describes them inside the prompt and
+retries, driving the model through its textual `tool_call` protocol for the rest of the session. You
+will see this in **Test connection** as "switched to its textual tool protocol automatically".
+If the reply is still empty after that, the endpoint is reachable but the request never produces
+output — raise **Max tokens** to 16000 or more (reasoning models spend most of their budget thinking),
+and confirm the model name is exactly the one the provider exposes.
+
 **Connection test fails**
 - 401/403 → wrong or unauthorised key.
 - 404 → wrong Base URL or model id. The app appends `/v1` only when the URL does not already end in a

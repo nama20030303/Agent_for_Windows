@@ -70,5 +70,5 @@ export interface AIProvider {
   getModels(): Promise<string[]>;
   usage(): TokenUsage;
   /** Model and endpoint, for diagnostics. Never includes the API key. */
-  describe(): { model: string; baseUrl: string };
+  describe(): { model: string; baseUrl: string; nativeToolCalls?: 'unknown' | 'yes' | 'no' };
 }

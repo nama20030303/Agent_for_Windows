@@ -106,9 +106,20 @@ const EMPTY_RESPONSE_NUDGE =
  */
 export function diagnoseEmptyResponse(
   response: { content: string; reasoning?: string; finishReason: string },
-  provider: { model: string; baseUrl: string }
+  provider: { model: string; baseUrl: string; nativeToolCalls?: 'unknown' | 'yes' | 'no' }
 ): string {
   const where = `Model \`${provider.model}\` at \`${provider.baseUrl || '(no endpoint configured)'}\``;
+
+  // The provider already retried without the `tools` parameter and described
+  // the tools in the prompt instead, so function calling is not the cause.
+  if (provider.nativeToolCalls === 'no') {
+    return (
+      `${where} returned nothing even after the app switched to its text-only compatibility mode ` +
+      `(finish reason: ${response.finishReason}). The endpoint is reachable, so the likely causes are a ` +
+      'too-small "Max tokens" for a reasoning model, or a model name the provider routes nowhere. ' +
+      'Raise "Max tokens" to 16000 or more, then use "Test connection" and try a different model.'
+    );
+  }
 
   if (response.finishReason === 'length') {
     return (

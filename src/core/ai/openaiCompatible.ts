@@ -8,6 +8,8 @@ import {
   type StreamHandlers
 } from './provider.js';
 import { createLogger } from '../shared/logger.js';
+import { withTextToolProtocol } from './textToolProtocol.js';
+import { extractTextToolCalls } from './toolCallFallback.js';
 
 const log = createLogger('ai');
 
@@ -57,11 +59,61 @@ function toWireMessages(messages: ChatMessage[]): unknown[] {
   });
 }
 
+/**
+ * In compatibility mode the tool call is ordinary text, so it would otherwise
+ * be typed out in the conversation. Forward the prose, stop at the fence.
+ */
+const HIDDEN = Symbol('hideToolBlocks');
+
+export function hideToolBlocks(handlers: StreamHandlers): StreamHandlers {
+  if ((handlers as any)[HIDDEN]) return handlers;
+  let seen = '';
+  let suppressed = false;
+  const wrapped: StreamHandlers = {
+    ...handlers,
+    onDelta: (text: string) => {
+      if (suppressed) return;
+      seen += text;
+      const fence = seen.indexOf('```');
+      if (fence === -1) {
+        handlers.onDelta?.(text);
+        return;
+      }
+      suppressed = true;
+      // Emit only the part that precedes the fence.
+      const visibleSoFar = seen.slice(0, fence);
+      const alreadyEmitted = seen.length - text.length;
+      if (visibleSoFar.length > alreadyEmitted) handlers.onDelta?.(visibleSoFar.slice(alreadyEmitted));
+    }
+  };
+  (wrapped as any)[HIDDEN] = true;
+  return wrapped;
+}
+
 function toWireTools(tools: ToolDefinition[]): unknown[] {
   return tools.map((t) => ({
     type: 'function',
     function: { name: t.name, description: t.description, parameters: t.parameters }
   }));
+}
+
+/**
+ * `content` is a string in the OpenAI spec, but gateways in the wild also send
+ * an array of parts, and completion-style proxies send `text`. Read all of
+ * them: treating a valid answer as "empty" is how the agent ends up reporting
+ * a configuration problem that does not exist.
+ */
+function readContent(message: any, choice?: any): string {
+  const value = message?.content;
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) {
+    return value
+      .map((part: any) => (typeof part === 'string' ? part : (part?.text ?? part?.content ?? '')))
+      .filter((part: unknown): part is string => typeof part === 'string')
+      .join('');
+  }
+  if (typeof choice?.text === 'string') return choice.text;
+  return '';
 }
 
 /**
@@ -80,13 +132,26 @@ export class OpenAICompatibleProvider implements AIProvider {
   readonly id: string = 'openai-compatible';
   private tokens: TokenUsage = { requests: 0, inputTokens: 0, outputTokens: 0 };
 
+  /**
+   * Whether this endpoint really emits native tool calls. Decided from what it
+   * actually does, not from what it claims: some endpoints accept the `tools`
+   * parameter and then answer with an empty completion. Once proven absent,
+   * every later request uses the textual protocol directly.
+   */
+  private nativeTools: 'unknown' | 'yes' | 'no' = 'unknown';
+
   constructor(
     public settings: AIProviderSettings,
     private retry: RetryOptions = { retries: 3, baseDelayMs: 800 }
   ) {}
 
-  describe(): { model: string; baseUrl: string } {
-    return { model: this.settings.model, baseUrl: this.settings.baseUrl };
+  describe(): { model: string; baseUrl: string; nativeToolCalls?: 'unknown' | 'yes' | 'no' } {
+    return { model: this.settings.model, baseUrl: this.settings.baseUrl, nativeToolCalls: this.nativeTools };
+  }
+
+  /** True once the endpoint has been shown not to support function calling. */
+  get usesTextToolProtocol(): boolean {
+    return this.nativeTools === 'no';
   }
 
   usage(): TokenUsage {
@@ -146,22 +211,58 @@ export class OpenAICompatibleProvider implements AIProvider {
     throw lastError ?? new AIProviderError('Request failed.', undefined, false, 'unknown');
   }
 
-  private body(request: ChatRequest, stream: boolean): string {
+  private body(request: ChatRequest, stream: boolean, textMode: boolean): string {
+    const useTools = !textMode && !!request.tools?.length;
+    const messages = textMode && request.tools?.length
+      ? withTextToolProtocol(request.messages, request.tools)
+      : request.messages;
     return JSON.stringify({
       model: this.settings.model,
-      messages: toWireMessages(request.messages),
-      tools: request.tools?.length ? toWireTools(request.tools) : undefined,
-      tool_choice: request.tools?.length ? 'auto' : undefined,
+      messages: toWireMessages(messages),
+      tools: useTools ? toWireTools(request.tools!) : undefined,
+      tool_choice: useTools ? 'auto' : undefined,
       temperature: request.temperature ?? this.settings.temperature,
       max_tokens: request.maxTokens ?? this.settings.maxTokens,
       stream
     });
   }
 
+  /**
+   * An endpoint that answers a tools-bearing request with nothing at all is
+   * telling us it cannot handle `tools`. Rather than reporting a dead end,
+   * drop the parameter, describe the tools in the prompt and try once more.
+   */
+  private emptyBecauseOfTools(request: ChatRequest, response: ChatResponse): boolean {
+    return (
+      !!request.tools?.length &&
+      this.nativeTools !== 'no' &&
+      response.toolCalls.length === 0 &&
+      !response.content.trim() &&
+      response.finishReason !== 'length'
+    );
+  }
+
+  private noteCapability(request: ChatRequest, response: ChatResponse): void {
+    if (request.tools?.length && response.toolCalls.length) this.nativeTools = 'yes';
+  }
+
   async sendMessage(request: ChatRequest): Promise<ChatResponse> {
+    const first = await this.sendOnce(request, this.usesTextToolProtocol);
+    if (!this.emptyBecauseOfTools(request, first)) {
+      this.noteCapability(request, first);
+      return first;
+    }
+    this.nativeTools = 'no';
+    log.warn('Endpoint returned nothing for a tools request; switching to the textual tool protocol', {
+      model: this.settings.model
+    });
+    return this.sendOnce(request, true);
+  }
+
+  private async sendOnce(request: ChatRequest, textMode: boolean): Promise<ChatResponse> {
     const res = await this.fetchWithRetry(
       this.url('/chat/completions'),
-      { method: 'POST', headers: this.headers(), body: this.body(request, false) },
+      { method: 'POST', headers: this.headers(), body: this.body(request, false, textMode) },
       request.signal
     );
     let json: any;
@@ -182,7 +283,7 @@ export class OpenAICompatibleProvider implements AIProvider {
     this.tokens.inputTokens += json?.usage?.prompt_tokens ?? 0;
     this.tokens.outputTokens += json?.usage?.completion_tokens ?? 0;
     return {
-      content: typeof message.content === 'string' ? message.content : '',
+      content: readContent(message, choice),
       reasoning: readReasoning(message),
       toolCalls,
       finishReason: choice.finish_reason ?? 'stop',
@@ -192,9 +293,27 @@ export class OpenAICompatibleProvider implements AIProvider {
   }
 
   async streamMessage(request: ChatRequest, handlers: StreamHandlers): Promise<ChatResponse> {
+    const first = await this.streamOnce(request, handlers, this.usesTextToolProtocol);
+    if (!this.emptyBecauseOfTools(request, first)) {
+      this.noteCapability(request, first);
+      return first;
+    }
+    this.nativeTools = 'no';
+    log.warn('Endpoint streamed nothing for a tools request; switching to the textual tool protocol', {
+      model: this.settings.model
+    });
+    return this.streamOnce(request, hideToolBlocks(handlers), true);
+  }
+
+  private async streamOnce(request: ChatRequest, handlers: StreamHandlers, textMode: boolean): Promise<ChatResponse> {
+    if (textMode) handlers = hideToolBlocks(handlers);
     const res = await this.fetchWithRetry(
       this.url('/chat/completions'),
-      { method: 'POST', headers: { ...this.headers(), Accept: 'text/event-stream' }, body: this.body(request, true) },
+      {
+        method: 'POST',
+        headers: { ...this.headers(), Accept: 'text/event-stream' },
+        body: this.body(request, true, textMode)
+      },
       request.signal
     );
     if (!res.body) throw new AIProviderError('Streaming response had no body.', res.status, false, 'invalid_response');
@@ -232,9 +351,10 @@ export class OpenAICompatibleProvider implements AIProvider {
             if (!choice) continue;
             if (choice.finish_reason) finishReason = choice.finish_reason;
             const delta = choice.delta ?? {};
-            if (typeof delta.content === 'string' && delta.content) {
-              content += delta.content;
-              handlers.onDelta?.(delta.content);
+            const chunk = readContent(delta, choice);
+            if (chunk) {
+              content += chunk;
+              handlers.onDelta?.(chunk);
             }
             // Thinking models stream their scratchpad separately; collect it but
             // never forward it to the UI.
@@ -289,7 +409,7 @@ export class OpenAICompatibleProvider implements AIProvider {
           { role: 'system', content: 'Reply with the single word: ready' },
           { role: 'user', content: 'ping' }
         ],
-        maxTokens: 16,
+        maxTokens: 512,
         temperature: 0
       });
       const modelAvailable = models.length === 0 ? undefined : models.includes(this.settings.model);
@@ -298,10 +418,11 @@ export class OpenAICompatibleProvider implements AIProvider {
       const reachable = response.content.trim() || (response.reasoning ? 'reasoning only' : 'empty content');
       const toolNote =
         toolCalling === true
-          ? 'Tool calling works.'
+          ? 'Native tool calling works.'
           : toolCalling === false
-            ? 'This model did not return a tool call — the agent will fall back to textual calls, which is ' +
-              'less reliable. Prefer a model advertised with function calling.'
+            ? 'This endpoint did not return a native tool call, so the agent switched to its textual tool ' +
+              'protocol automatically. That works, but it depends on the model following the format — a ' +
+              'model advertised with function calling is more reliable.'
             : 'Tool calling could not be verified.';
 
       return {
@@ -341,10 +462,16 @@ export class OpenAICompatibleProvider implements AIProvider {
             mutating: false
           }
         ],
-        maxTokens: 256,
+        maxTokens: 1024,
         temperature: 0
       });
-      return response.toolCalls.some((call) => call.name === 'ping_probe');
+      if (response.toolCalls.some((call) => call.name === 'ping_probe')) return true;
+      // A textual call still proves the agent can drive this endpoint, but it
+      // is not native support, so remember that and report it as such.
+      if (extractTextToolCalls(response.content).calls.some((call) => call.name === 'ping_probe')) {
+        this.nativeTools = 'no';
+      }
+      return false;
     } catch {
       return undefined;
     }
