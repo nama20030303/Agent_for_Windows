@@ -347,6 +347,8 @@ export interface TokenUsage {
 export type AgentEvent =
   | { type: 'assistant_message'; sessionId: string; content: string; final: boolean }
   | { type: 'assistant_delta'; sessionId: string; delta: string }
+  /** Discard the partially streamed message: the answer is being restarted. */
+  | { type: 'assistant_restart'; sessionId: string }
   | { type: 'tool_call'; sessionId: string; call: ToolCall; risk: RiskLevel }
   | { type: 'tool_result'; sessionId: string; callId: string; result: ToolResult }
   | { type: 'question'; sessionId: string; questions: AgentQuestion[] }

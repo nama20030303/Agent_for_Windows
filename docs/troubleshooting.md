@@ -32,7 +32,16 @@ you why. The usual causes:
 - *Wrong base URL* — a host that answers 200 with a different payload shape yields empty replies.
   Use *Test connection*.
 
-**The agent explains the work instead of doing it, then says it finished**
+**The agent explains the work instead of doing it**
+Handled automatically. When a reply in Agent or Auto mode contains no tool call, the app assumes the
+endpoint cannot do function calling: it drops the `tools` parameter, puts the tool list and the
+`tool_call` format into the prompt, shows the model its own failed attempt and retries. From then on
+the whole session uses that textual protocol, and blocks the model emits are parsed back into real
+calls — including sloppy ones with raw newlines inside strings, trailing commas or a missing
+language tag. Only if the model ignores that too does the run stop as BLOCKED, and it never reports
+success for work it did not do.
+
+**Old note: the agent explains the work instead of doing it, then says it finished**
 The model is not emitting tool calls, so nothing reaches the filesystem. Nexus Code no longer reports
 such a turn as completed: it asks the model once to use tools, then stops with **BLOCKED** and says
 so. Two ways forward:

@@ -106,7 +106,7 @@ describe('agent against a model without function calling', () => {
     expect(states).toContain('BLOCKED');
 
     const error = harness.events.find((e) => e.type === 'error') as any;
-    expect(error.message).toMatch(/does not support tool calling/i);
+    expect(error.message).toMatch(/compatibility mode/i);
     expect(provider.requests).toHaveLength(2); // nudged exactly once
   }, 30_000);
 
@@ -131,4 +131,43 @@ describe('agent against a model without function calling', () => {
     expect(states).toContain('COMPLETED');
     expect(harness.events.some((e) => e.type === 'error')).toBe(false);
   }, 30_000);
+});
+
+describe('forgiving parsing of a sloppy model', () => {
+  const tools = ['write_file', 'read_file', 'run_command', 'finish'];
+
+  it('recovers a call whose JSON has raw newlines in the file content', () => {
+    // Exactly what models produce when writing code: the content string is not escaped.
+    const raw = '```tool_call\n{ "tool": "write_file", "arguments": { "path": "snake.py", "content": "import pygame\npygame.init()\n" } }\n```';
+    const { calls } = extractTextToolCalls(raw, tools);
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(calls[0].arguments).content).toBe('import pygame\npygame.init()\n');
+  });
+
+  it('tolerates a trailing comma, a wrapper object and a missing language tag', () => {
+    expect(extractTextToolCalls('```\n{"tool_call":{"tool":"read_file","arguments":{"path":"a.py",}}}\n```', tools).calls[0].name).toBe(
+      'read_file'
+    );
+  });
+
+  it('accepts arguments passed as a JSON string', () => {
+    const { calls } = extractTextToolCalls('```tool_call\n{"name":"run_command","arguments":"{\\"command\\":\\"ls\\"}"}\n```', tools);
+    expect(JSON.parse(calls[0].arguments).command).toBe('ls');
+  });
+
+  it('finds a call written without any fence at all', () => {
+    const { calls, cleaned } = extractTextToolCalls(
+      'Okay, doing it.\n{"tool": "read_file", "arguments": {"path": "main.py"}}\nThen I will check the result.',
+      tools
+    );
+    expect(calls).toHaveLength(1);
+    expect(cleaned).not.toContain('read_file');
+  });
+
+  it('still refuses code, prose and unknown tool names', () => {
+    expect(extractTextToolCalls('```python\nprint({"tool": "write_file"})\n```', tools).calls).toHaveLength(0);
+    expect(extractTextToolCalls('I will write_file to disk and then finish.', tools).calls).toHaveLength(0);
+    expect(extractTextToolCalls('```tool_call\n{"tool":"rm_minus_rf","arguments":{}}\n```', tools).calls).toHaveLength(0);
+    expect(extractTextToolCalls('```json\n{"path":"a.py","content":"x"}\n```', tools).calls).toHaveLength(0);
+  });
 });

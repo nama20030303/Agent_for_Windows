@@ -250,8 +250,9 @@ export class AgentController {
         // call so the agent can still act. Thinking models sometimes put it in
         // the reasoning channel, so that is checked too.
         if (response.toolCalls.length === 0) {
-          const fromText = extractTextToolCalls(response.content);
-          const found = fromText.calls.length ? fromText : extractTextToolCalls(response.reasoning ?? '');
+          const names = this.deps.tools.definitions().map((d) => d.name);
+          const fromText = extractTextToolCalls(response.content, names);
+          const found = fromText.calls.length ? fromText : extractTextToolCalls(response.reasoning ?? '', names);
           if (found.calls.length) {
             response.toolCalls = found.calls;
             if (fromText.calls.length) response.content = found.cleaned;
@@ -292,9 +293,12 @@ export class AgentController {
                 type: 'error',
                 sessionId: options.sessionId,
                 message:
-                  'The model described the work instead of performing it, twice in a row, so nothing was ' +
-                  'changed on disk. Its endpoint most likely does not support tool calling. Check the ' +
-                  'provider\'s model card, or choose a model advertised with "Function Calling" / "Tools".'
+                  'The model kept describing the work instead of performing it, so nothing was changed on ' +
+                  'disk. The app already retried in compatibility mode, sending the tool list and the ' +
+                  'tool_call format in the prompt, and the model still did not follow it. This model is ' +
+                  'too weak or too chatty to drive the agent: pick one advertised with "Function Calling" ' +
+                  '/ "Tools", or raise "Max tokens" if its replies are being cut short. Chat and Plan ' +
+                  'modes still work with it.'
               });
               this.emitState(options.sessionId, 'BLOCKED', 'The model is not calling tools.');
               break;
@@ -492,11 +496,15 @@ export class AgentController {
       : this.deps.tools.definitions();
 
     rt.history = this.deps.context.compress(rt.history, options.sessionId);
-    const request = { messages: rt.history, tools, signal };
+    // In an executing mode a reply without a tool call is useless, and that
+    // fact is what lets the provider detect an endpoint without function
+    // calling and fall back to its textual protocol.
+    const request = { messages: rt.history, tools, signal, requireToolCall: !readOnly };
 
     if (this.deps.provider.settings.streaming) {
       return this.deps.provider.streamMessage(request, {
-        onDelta: (delta) => this.emit({ type: 'assistant_delta', sessionId: options.sessionId, delta })
+        onDelta: (delta) => this.emit({ type: 'assistant_delta', sessionId: options.sessionId, delta }),
+        onRestart: () => this.emit({ type: 'assistant_restart', sessionId: options.sessionId })
       });
     }
     return this.deps.provider.sendMessage(request);

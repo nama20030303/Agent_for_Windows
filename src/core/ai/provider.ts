@@ -3,6 +3,13 @@ import type { AIProviderSettings, ChatMessage, ToolDefinition, TokenUsage } from
 export interface ChatRequest {
   messages: ChatMessage[];
   tools?: ToolDefinition[];
+  /**
+   * The caller needs an action, not an opinion: this turn is only useful if it
+   * produces a tool call. Set in Agent/Auto mode. It lets the provider treat a
+   * chatty reply as proof that the endpoint cannot do function calling and
+   * switch to the textual protocol, instead of returning prose nobody can run.
+   */
+  requireToolCall?: boolean;
   temperature?: number;
   maxTokens?: number;
   signal?: AbortSignal;
@@ -30,6 +37,12 @@ export interface ChatResponse {
 
 export interface StreamHandlers {
   onDelta?: (text: string) => void;
+  /**
+   * The provider is discarding what it streamed so far and starting the answer
+   * again (it fell back to the textual tool protocol). The UI must drop the
+   * partial message rather than append to it.
+   */
+  onRestart?: () => void;
   onToolCallDelta?: (partial: { index: number; id?: string; name?: string; argumentsDelta?: string }) => void;
 }
 

@@ -151,6 +151,15 @@ export function applyAgentEvent(event: AgentEvent): void {
       });
       break;
     }
+    case 'assistant_restart': {
+      // The provider threw away its partial answer and is starting over.
+      setState((s) => {
+        const turns = [...s.turns];
+        if (turns.at(-1)?.kind === 'assistant' && (turns.at(-1) as any).streaming) turns.pop();
+        return { turns };
+      });
+      break;
+    }
     case 'assistant_message': {
       setState((s) => {
         const turns = [...s.turns];

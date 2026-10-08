@@ -90,6 +90,26 @@ export function hideToolBlocks(handlers: StreamHandlers): StreamHandlers {
   return wrapped;
 }
 
+/**
+ * The retry carries the model's own failed attempt, so it can see what was
+ * wrong instead of repeating it.
+ */
+function retryRequest(request: ChatRequest, previous: ChatResponse): ChatRequest {
+  const attempt = previous.content.trim();
+  const messages = [...request.messages];
+  if (attempt) {
+    messages.push({ role: 'assistant', content: attempt.slice(0, 2000) });
+    messages.push({
+      role: 'user',
+      content:
+        'That reply changed nothing on the computer, because describing an action does not perform it. ' +
+        'This endpoint has no native function calling, so use the tool protocol from the system prompt: ' +
+        'reply with one fenced tool_call block containing a single JSON object and nothing else after it.'
+    });
+  }
+  return { ...request, messages };
+}
+
 function toWireTools(tools: ToolDefinition[]): unknown[] {
   return tools.map((t) => ({
     type: 'function',
@@ -232,14 +252,20 @@ export class OpenAICompatibleProvider implements AIProvider {
    * telling us it cannot handle `tools`. Rather than reporting a dead end,
    * drop the parameter, describe the tools in the prompt and try once more.
    */
-  private emptyBecauseOfTools(request: ChatRequest, response: ChatResponse): boolean {
-    return (
-      !!request.tools?.length &&
-      this.nativeTools !== 'no' &&
-      response.toolCalls.length === 0 &&
-      !response.content.trim() &&
-      response.finishReason !== 'length'
-    );
+  private needsTextProtocol(request: ChatRequest, response: ChatResponse): boolean {
+    if (!request.tools?.length || this.nativeTools === 'no') return false;
+    if (response.toolCalls.length) return false;
+    // A truncated reply says nothing about capability; it is a budget problem.
+    if (response.finishReason === 'length') return false;
+
+    // Nothing at all came back: the endpoint choked on the `tools` parameter.
+    if (!response.content.trim()) return true;
+
+    // It answered, but the caller needed an action. If the text already holds a
+    // usable call the endpoint is fine as it is; otherwise this model is not
+    // going to emit native calls, so stop asking it to.
+    if (!request.requireToolCall) return false;
+    return extractTextToolCalls(response.content).calls.length === 0;
   }
 
   private noteCapability(request: ChatRequest, response: ChatResponse): void {
@@ -248,15 +274,16 @@ export class OpenAICompatibleProvider implements AIProvider {
 
   async sendMessage(request: ChatRequest): Promise<ChatResponse> {
     const first = await this.sendOnce(request, this.usesTextToolProtocol);
-    if (!this.emptyBecauseOfTools(request, first)) {
+    if (!this.needsTextProtocol(request, first)) {
       this.noteCapability(request, first);
       return first;
     }
     this.nativeTools = 'no';
-    log.warn('Endpoint returned nothing for a tools request; switching to the textual tool protocol', {
-      model: this.settings.model
+    log.warn('Endpoint produced no tool call; switching to the textual tool protocol', {
+      model: this.settings.model,
+      hadContent: !!first.content.trim()
     });
-    return this.sendOnce(request, true);
+    return this.sendOnce(retryRequest(request, first), true);
   }
 
   private async sendOnce(request: ChatRequest, textMode: boolean): Promise<ChatResponse> {
@@ -294,15 +321,18 @@ export class OpenAICompatibleProvider implements AIProvider {
 
   async streamMessage(request: ChatRequest, handlers: StreamHandlers): Promise<ChatResponse> {
     const first = await this.streamOnce(request, handlers, this.usesTextToolProtocol);
-    if (!this.emptyBecauseOfTools(request, first)) {
+    if (!this.needsTextProtocol(request, first)) {
       this.noteCapability(request, first);
       return first;
     }
     this.nativeTools = 'no';
-    log.warn('Endpoint streamed nothing for a tools request; switching to the textual tool protocol', {
-      model: this.settings.model
+    log.warn('Endpoint streamed no tool call; switching to the textual tool protocol', {
+      model: this.settings.model,
+      hadContent: !!first.content.trim()
     });
-    return this.streamOnce(request, hideToolBlocks(handlers), true);
+    // The retry replaces the answer, so tell the UI to start the message over.
+    handlers.onRestart?.();
+    return this.streamOnce(retryRequest(request, first), handlers, true);
   }
 
   private async streamOnce(request: ChatRequest, handlers: StreamHandlers, textMode: boolean): Promise<ChatResponse> {

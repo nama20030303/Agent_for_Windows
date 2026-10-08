@@ -215,3 +215,63 @@ describe('streaming in compatibility mode', () => {
     expect(response.content).toContain('"tool":"write_file"');
   });
 });
+
+describe('endpoint that answers in prose instead of calling a tool', () => {
+  const PROSE = {
+    choices: [
+      {
+        message: { content: 'Sure! Here is a snake game:\n\n```python\nimport pygame\n```\nSave it as snake.py.' },
+        finish_reason: 'stop'
+      }
+    ]
+  };
+
+  it('switches to the textual protocol and shows the model its failed attempt', async () => {
+    const bodies: any[] = [];
+    globalThis.fetch = vi.fn(async (_url: any, init: any) => {
+      bodies.push(JSON.parse(init.body));
+      return jsonResponse(bodies.length === 1 ? PROSE : TEXT_CALL);
+    }) as any;
+
+    const p = provider();
+    const response = await p.sendMessage({
+      messages: [{ role: 'system', content: 'You are Nexus Code.' }, { role: 'user', content: 'make snake' }],
+      tools: [writeFile],
+      requireToolCall: true
+    });
+
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1].tools).toBeUndefined();
+    expect(bodies[1].messages[0].content).toContain('TOOL PROTOCOL');
+    const last = bodies[1].messages.at(-1);
+    expect(last.role).toBe('user');
+    expect(last.content).toContain('changed nothing on the computer');
+    expect(response.content).toContain('"tool":"write_file"');
+  });
+
+  it('leaves Chat mode alone: prose is a valid answer when no action was required', async () => {
+    const bodies: any[] = [];
+    globalThis.fetch = vi.fn(async (_url: any, init: any) => {
+      bodies.push(JSON.parse(init.body));
+      return jsonResponse(PROSE);
+    }) as any;
+
+    const p = provider();
+    await p.sendMessage({ messages: [{ role: 'user', content: 'how do I write snake?' }], tools: [writeFile] });
+
+    expect(bodies).toHaveLength(1);
+    expect(p.usesTextToolProtocol).toBe(false);
+  });
+
+  it('does not retry when the prose already contains a usable call', async () => {
+    const bodies: any[] = [];
+    globalThis.fetch = vi.fn(async (_url: any, init: any) => {
+      bodies.push(JSON.parse(init.body));
+      return jsonResponse(TEXT_CALL);
+    }) as any;
+
+    const p = provider();
+    await p.sendMessage({ messages: [{ role: 'user', content: 'go' }], tools: [writeFile], requireToolCall: true });
+    expect(bodies).toHaveLength(1);
+  });
+});
