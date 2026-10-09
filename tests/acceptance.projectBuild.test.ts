@@ -34,25 +34,33 @@ describe('building a project with a text-only model', () => {
 
     // A module long enough that no sane output budget would carry it in one
     // call, built the way the prompt instructs: write_file then append_file.
-    const partOne = ['def area(width, height):', '    return width * height', ''].join('\n');
-    const partTwo = ['def perimeter(width, height):', '    return 2 * (width + height)', ''].join('\n');
-    const main = [
-      'from geometry import area, perimeter',
+    // Node is the one runtime guaranteed on every machine that runs this
+    // suite, including the Windows job that builds the installer.
+    const partOne = ['function area(width, height) {', '  return width * height;', '}', ''].join('\n');
+    const partTwo = [
+      'function perimeter(width, height) {',
+      '  return 2 * (width + height);',
+      '}',
       '',
-      'if __name__ == "__main__":',
-      '    print(f"area={area(3, 4)} perimeter={perimeter(3, 4)}")',
+      'module.exports = { area, perimeter };',
+      ''
+    ].join('\n');
+    const main = [
+      'const { area, perimeter } = require("./geometry");',
+      '',
+      'console.log(`area=${area(3, 4)} perimeter=${perimeter(3, 4)}`);',
       ''
     ].join('\n');
 
     const script = [
       'I will start with the package directory.\n\n' + call('create_directory', { path: 'shapes' }),
-      'First half of the module.\n\n' + call('write_file', { path: 'shapes/geometry.py', content: partOne }),
-      'Second half.\n\n' + call('append_file', { path: 'shapes/geometry.py', content: partTwo }),
+      'First half of the module.\n\n' + call('write_file', { path: 'shapes/geometry.js', content: partOne }),
+      'Second half.\n\n' + call('append_file', { path: 'shapes/geometry.js', content: partTwo }),
       // The entry point contains quotes and braces, the shape that used to break the parser.
-      'Now the entry point.\n\n' + call('write_file', { path: 'shapes/main.py', content: main }),
-      'Running it.\n\n' + call('execute_command', { command: 'python3 main.py', cwd: 'shapes' }),
+      'Now the entry point.\n\n' + call('write_file', { path: 'shapes/main.js', content: main }),
+      'Running it.\n\n' + call('execute_command', { command: 'node main.js', cwd: 'shapes' }),
       'All good.\n\n' +
-        call('finish', { report: 'Created shapes/ with geometry.py and main.py; ran it successfully.', success: true, verified: true })
+        call('finish', { report: 'Created shapes/ with geometry.js and main.js; ran it successfully.', success: true, verified: true })
     ];
 
     let turn = 0;
@@ -77,15 +85,16 @@ describe('building a project with a text-only model', () => {
       projectId: harness.projectId,
       workspaceRoot: root,
       mode: 'agent',
-      shell: 'bash',
+      shell: process.platform === 'win32' ? 'powershell' : 'bash',
       userMessage: 'build a small python package that computes area and perimeter, and run it'
     });
 
     // The project exists on disk, assembled from several calls.
-    const geometry = fs.readFileSync(path.join(root, 'shapes', 'geometry.py'), 'utf8');
+    const geometry = fs.readFileSync(path.join(root, 'shapes', 'geometry.js'), 'utf8');
     expect(geometry).toBe(partOne + partTwo);
-    expect(geometry.split('\n').filter(Boolean)).toHaveLength(4);
-    expect(fs.readFileSync(path.join(root, 'shapes', 'main.py'), 'utf8')).toBe(main);
+    expect(geometry).toContain('function area');
+    expect(geometry).toContain('function perimeter');
+    expect(fs.readFileSync(path.join(root, 'shapes', 'main.js'), 'utf8')).toBe(main);
 
     // And it really ran: the command tool produced the program's own output.
     const toolEvents = harness.events.filter((e: any) => e.type === 'tool_result') as any[];
