@@ -156,3 +156,29 @@ describe('tool validation', () => {
     expect(readOnly).not.toContain('execute_command');
   });
 });
+
+describe('append_file', () => {
+  const append = (args: Record<string, unknown>) =>
+    tools.execute({ id: 'a', name: 'append_file', arguments: args }, ctx, autonomous());
+
+  it('builds a file across several calls and keeps the seam clean', async () => {
+    const first = await append({ path: 'notes.md', content: '# Title' });
+    expect(first.success).toBe(true);
+    expect(fs.readFileSync(path.join(root, 'notes.md'), 'utf8')).toBe('# Title');
+
+    // The previous part did not end with a newline; the seam must not glue
+    // the two lines together.
+    await append({ path: 'notes.md', content: 'second line\n' });
+    expect(fs.readFileSync(path.join(root, 'notes.md'), 'utf8')).toBe('# Title\nsecond line\n');
+
+    // An existing trailing newline is not doubled.
+    await append({ path: 'notes.md', content: 'third line\n' });
+    expect(fs.readFileSync(path.join(root, 'notes.md'), 'utf8')).toBe('# Title\nsecond line\nthird line\n');
+  });
+
+  it('refuses to escape the workspace', async () => {
+    const result = await append({ path: '../outside.txt', content: 'x' });
+    expect(result.success).toBe(false);
+    expect(fs.existsSync(path.join(root, '..', 'outside.txt'))).toBe(false);
+  });
+});

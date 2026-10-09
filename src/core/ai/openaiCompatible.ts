@@ -142,6 +142,7 @@ export function rankModels(models: string[], current: string): string[] {
 const CORE_TOOLS = [
   'finish',
   'write_file',
+  'append_file',
   'read_file',
   'edit_file',
   'list_directory',

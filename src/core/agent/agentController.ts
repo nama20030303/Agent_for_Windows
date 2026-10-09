@@ -298,9 +298,9 @@ export class AgentController {
               role: 'user',
               content:
                 `Your \`${truncated[0]}\` call was cut off in the middle of the JSON, so nothing was run. ` +
-                'The content was too long for one reply. Send it again in smaller pieces: create the file ' +
-                'with a short first part, then extend it with further calls. Never put more than about 150 ' +
-                'lines in one call.'
+                'The content was too long for one reply. Build the file in pieces instead: call `write_file` ' +
+                'with the first part, then `append_file` with each following part. Keep every call under ' +
+                'about 150 lines.'
             });
             this.timeline(options.sessionId, `Model's ${truncated[0]} call was truncated; asking for smaller pieces`);
             continue;

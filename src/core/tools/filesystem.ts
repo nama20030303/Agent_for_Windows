@@ -173,6 +173,68 @@ export const writeFile = defineTool(
   (a) => `Write ${a.path}`
 );
 
+/**
+ * Building a long file one call at a time.
+ *
+ * A model with a modest output budget cannot emit a 600-line file in a single
+ * tool call: the reply is cut off and nothing runs. `edit_file` is no help
+ * there, because it needs an exact anchor that does not exist yet. Appending
+ * is the simplest primitive that lets a weak model build a large file - and a
+ * whole project - in pieces it can actually finish.
+ */
+export const appendFile = defineTool(
+  {
+    name: 'append_file',
+    description:
+      'Add text to the end of a file, creating it when missing. Use this to build a long file across ' +
+      'several calls instead of sending it all at once.',
+    category: 'filesystem',
+    risk: 'LOW',
+    mutating: true,
+    parameters: schema(
+      {
+        path: str('File path relative to the workspace root.'),
+        content: str('Text to add at the end of the file.')
+      },
+      ['path', 'content']
+    )
+  },
+  async (args, ctx) => {
+    const check = rp(ctx, args.path);
+    if (!check.ok) return fail('append_file', check.reason!);
+    const addition = String(args.content ?? '');
+
+    let before = '';
+    let existed = false;
+    try {
+      before = await fs.readFile(check.absolute, 'utf8');
+      existed = true;
+    } catch {
+      /* new file */
+    }
+    // Keep the seam clean: a part almost never starts with the newline that
+    // should separate it from the previous one.
+    const separator = existed && before && !before.endsWith('\n') && !addition.startsWith('\n') ? '\n' : '';
+    const after = before + separator + addition;
+
+    try {
+      await atomicWrite(check.absolute, after);
+    } catch (err) {
+      return fail('append_file', (err as Error).message, { errorType: 'PERMISSION_ERROR' });
+    }
+
+    const patch = unifiedDiff(check.relative, before, after);
+    const stats = diffStats(patch);
+    ctx.onFileTouched?.(check.relative, existed ? 'modified' : 'created');
+    const lines = after.split('\n').length;
+    return ok('append_file', {
+      data: { path: check.relative, created: !existed, bytes: after.length, lines, diff: patch, ...stats },
+      summary: `${existed ? 'Appended to' : 'Created'} ${check.relative} (+${stats.added} lines, ${lines} total)`
+    });
+  },
+  (a) => `Append to ${a.path}`
+);
+
 export const editFile = defineTool(
   {
     name: 'edit_file',
@@ -386,6 +448,7 @@ export const getFileInfo = defineTool(
 );
 
 export const filesystemTools: Tool[] = [
+  appendFile,
   listDirectory,
   readFile,
   writeFile,
