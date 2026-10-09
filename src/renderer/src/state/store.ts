@@ -17,27 +17,10 @@ import type {
   VerificationReport
 } from '../../../core/shared/types.js';
 import type { SessionSummary, WorkspaceInfo } from '../../../core/shared/ipc.js';
+import type { ToolActivity, TurnItem } from '../../../core/shared/uiState.js';
 import { api } from '../bridge.js';
 
-export interface ToolActivity {
-  id: string;
-  call: ToolCall;
-  risk: string;
-  result?: ToolResult;
-  startedAt: number;
-}
-
-export type TurnItem =
-  | { kind: 'user'; id: string; content: string }
-  | { kind: 'assistant'; id: string; content: string; streaming?: boolean }
-  | { kind: 'tool'; id: string; activity: ToolActivity }
-  | { kind: 'question'; id: string; questions: AgentQuestion[]; answered?: string }
-  | { kind: 'plan'; id: string; plan: Plan; resolved?: 'approved' | 'cancelled' }
-  | { kind: 'approval'; id: string; request: PermissionRequest; decision?: string }
-  | { kind: 'verification'; id: string; report: VerificationReport }
-  | { kind: 'requirements'; id: string; analysis: RequirementAnalysis }
-  | { kind: 'completion'; id: string; report: string; verified: boolean }
-  | { kind: 'error'; id: string; message: string };
+export type { ToolActivity, TurnItem } from '../../../core/shared/uiState.js';
 
 export interface AppState {
   ready: boolean;

@@ -3,10 +3,10 @@
  * reading on its own and it must never carry a key.
  */
 import { describe, it, expect } from 'vitest';
-import { buildDiagnosticsReport } from '../src/renderer/src/state/diagnostics.js';
-import type { AppState } from '../src/renderer/src/state/store.js';
+import { buildDiagnosticsReport } from '../src/core/shared/diagnostics.js';
+import type { UiSnapshot } from '../src/core/shared/uiState.js';
 
-function state(overrides: Partial<AppState> = {}): AppState {
+function state(overrides: Partial<UiSnapshot> = {}): UiSnapshot {
   return {
     ready: true,
     settings: {
@@ -52,7 +52,7 @@ function state(overrides: Partial<AppState> = {}): AppState {
     busy: false,
     toast: null,
     ...overrides
-  } as AppState;
+  } as UiSnapshot;
 }
 
 describe('the diagnostics report', () => {

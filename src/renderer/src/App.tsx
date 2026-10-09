@@ -23,7 +23,7 @@ import { CodeViewer } from './components/CodeViewer.js';
 import { CommandPalette, type Command } from './components/CommandPalette.js';
 import { SettingsDialog } from './components/SettingsDialog.js';
 import { Onboarding } from './components/Onboarding.js';
-import { buildDiagnosticsReport } from './state/diagnostics.js';
+import { buildDiagnosticsReport } from '../../core/shared/diagnostics.js';
 import type { AgentEvent, ManagedProcess } from '../../core/shared/types.js';
 
 export default function App() {

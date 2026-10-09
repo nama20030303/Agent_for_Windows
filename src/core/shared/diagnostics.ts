@@ -1,5 +1,5 @@
-import { redactSecrets } from '../../../core/shared/secrets.js';
-import type { AppState, ToolActivity, TurnItem } from './store.js';
+import { redactSecrets } from './secrets.js';
+import type { ToolActivity, TurnItem, UiSnapshot } from './uiState.js';
 
 /**
  * One block of text that explains a failed session to someone who was not
@@ -67,7 +67,7 @@ function turnLine(turn: TurnItem): string | null {
   }
 }
 
-export function buildDiagnosticsReport(state: AppState, appVersion: string): string {
+export function buildDiagnosticsReport(state: UiSnapshot, appVersion: string): string {
   const ai = state.settings?.ai;
   const failures = state.turns.filter(
     (t): t is Extract<TurnItem, { kind: 'tool' }> => t.kind === 'tool' && !!t.activity.result && !t.activity.result.success
