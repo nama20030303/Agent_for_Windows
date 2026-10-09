@@ -55,6 +55,23 @@ export function registerIpc(services: AppServices, getWindow: () => BrowserWindo
   });
 
   /**
+   * Ask the provider which models it really hosts, then keep the first one
+   * that answers. A gateway returns an empty completion for a model it does
+   * not route, which is indistinguishable from a broken application.
+   */
+  handle(IPC.settingsFindModel, async () => {
+    const settings = services.settings();
+    if (!settings.ai.baseUrl) return { ok: false, tried: [], models: [], message: 'Base URL is not configured.' };
+    const provider = createProvider(settings.ai);
+    const found = await provider.findWorkingSetup();
+    if (found.ok && found.model && found.model !== settings.ai.model) {
+      services.settingsStore.update({ ai: { ...settings.ai, model: found.model } });
+      services.rebuildAgent();
+    }
+    return found;
+  });
+
+  /**
    * Find the endpoint that matches the user's key instead of making them guess.
    * The key is probed against known OpenAI-compatible hosts, most likely first.
    */

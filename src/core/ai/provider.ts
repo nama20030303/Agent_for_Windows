@@ -81,6 +81,19 @@ export interface AIProvider {
     toolCalling?: boolean;
   }>;
   getModels(): Promise<string[]>;
+  /**
+   * Probe the provider's catalogue for a model that actually produces text,
+   * and keep the request shape it answers on.
+   */
+  findWorkingSetup(signal?: AbortSignal): Promise<{
+    ok: boolean;
+    model?: string;
+    apiStyle?: 'chat' | 'responses';
+    toolCalling?: boolean;
+    tried: { model: string; result: string }[];
+    models: string[];
+    message: string;
+  }>;
   usage(): TokenUsage;
   /** Model and endpoint, for diagnostics. Never includes the API key. */
   describe(): {
@@ -91,5 +104,7 @@ export interface AIProvider {
     maxTokensOmitted?: boolean;
     /** The endpoint only answers to a trimmed-down request. */
     payloadReduced?: boolean;
+    /** Which request shape the endpoint turned out to speak. */
+    apiStyle?: 'chat' | 'responses';
   };
 }

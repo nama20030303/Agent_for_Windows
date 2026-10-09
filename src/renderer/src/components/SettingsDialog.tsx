@@ -16,6 +16,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [apiKey, setApiKey] = useState('');
   const [hasKey, setHasKey] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [finding, setFinding] = useState(false);
   const [detecting, setDetecting] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string; modelAvailable?: boolean } | null>(null);
   const [paths, setPaths] = useState<{ appData: string; logs: string; database: string } | null>(null);
@@ -133,6 +134,28 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               }}
             >
               {testing ? 'Testing…' : 'Test connection'}
+            </button>
+            <button
+              className="btn"
+              disabled={finding}
+              title="Ask the provider which models it really hosts and switch to one that answers."
+              onClick={async () => {
+                setFinding(true);
+                setResult(null);
+                try {
+                  if (apiKey.trim()) await api.settings.setApiKey(apiKey.trim());
+                  await api.settings.update(draft);
+                  const found = await api.settings.findWorkingModel();
+                  if (found.ok && found.model) setDraft({ ...draft, ai: { ...draft.ai, model: found.model } });
+                  setResult({ ok: found.ok, message: found.message });
+                } catch (err) {
+                  setResult({ ok: false, message: (err as Error).message });
+                } finally {
+                  setFinding(false);
+                }
+              }}
+            >
+              {finding ? 'Searching…' : 'Find a working model'}
             </button>
             {result && (
               <span className={`banner ${result.ok ? 'ok' : 'err'}`} style={{ margin: 0, flex: 1 }}>

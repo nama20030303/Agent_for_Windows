@@ -387,9 +387,11 @@ describe('an endpoint that answers with silence', () => {
   it('retries without the token limit, then with a smaller payload', async () => {
     const history = Array.from({ length: 20 }, (_, i) => ({ role: 'user' as const, content: `message ${i}` }));
     const bodies: any[] = [];
+    let attempts = 0; // not reset below, unlike `bodies`
     globalThis.fetch = vi.fn(async (_u: any, init: any) => {
       bodies.push(JSON.parse(init.body));
-      return jsonResponse(bodies.length < 3 ? SILENT : OK);
+      attempts += 1;
+      return jsonResponse(attempts < 3 ? SILENT : OK);
     }) as any;
 
     const p = provider();

@@ -89,7 +89,7 @@ describe('empty-response diagnosis', () => {
   it('explains an otherwise empty reply and names the endpoint', () => {
     const msg = diagnoseEmptyResponse({ content: '', finishReason: 'stop' }, where);
     expect(msg).toContain('https://host/v1');
-    expect(msg).toMatch(/Test connection/);
+    expect(msg).toMatch(/Find a working model/);
   });
 
   it('never leaks the API key into the diagnosis', () => {

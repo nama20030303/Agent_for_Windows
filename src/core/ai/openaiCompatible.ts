@@ -9,6 +9,7 @@ import {
 } from './provider.js';
 import { createLogger } from '../shared/logger.js';
 import { withForcedBlock, withTextToolProtocol } from './textToolProtocol.js';
+import { buildResponsesBody, parseResponsesJson } from './responsesApi.js';
 import { extractTextToolCalls } from './toolCallFallback.js';
 
 const log = createLogger('ai');
@@ -116,6 +117,27 @@ function retryRequest(request: ChatRequest, previous: ChatResponse): ChatRequest
   };
 }
 
+/**
+ * Put the most promising models first: the same family as the one configured,
+ * then capable general-purpose families, then the rest.
+ */
+export function rankModels(models: string[], current: string): string[] {
+  const family = current.split(/[\/:._-]/).filter((part) => part.length > 2)[0]?.toLowerCase() ?? '';
+  const preferred = ['claude', 'gpt', 'gemini', 'deepseek', 'qwen', 'llama', 'mistral', 'nemotron'];
+
+  const score = (model: string): number => {
+    const id = model.toLowerCase();
+    if (family && id.includes(family)) return 0;
+    const rank = preferred.findIndex((name) => id.includes(name));
+    const base = rank === -1 ? preferred.length + 1 : rank + 1;
+    // Avoid non-text models: they can only waste a probe.
+    if (/embed|whisper|tts|image|dall|vision|rerank|moderation/.test(id)) return 100;
+    return base;
+  };
+
+  return [...models].sort((a, b) => score(a) - score(b) || a.localeCompare(b));
+}
+
 /** The tools a coding run cannot do without, in priority order. */
 const CORE_TOOLS = [
   'finish',
@@ -203,6 +225,9 @@ export class OpenAICompatibleProvider implements AIProvider {
   /** Set when it only answers to a small payload (few tools, short history). */
   private reducedPayload = false;
 
+  /** Which request shape this endpoint actually answers. */
+  private apiStyle: 'chat' | 'responses' = 'chat';
+
   constructor(
     public settings: AIProviderSettings,
     private retry: RetryOptions = { retries: 3, baseDelayMs: 800 }
@@ -214,13 +239,15 @@ export class OpenAICompatibleProvider implements AIProvider {
     nativeToolCalls?: 'unknown' | 'yes' | 'no';
     maxTokensOmitted?: boolean;
     payloadReduced?: boolean;
+    apiStyle?: 'chat' | 'responses';
   } {
     return {
       model: this.settings.model,
       baseUrl: this.settings.baseUrl,
       nativeToolCalls: this.nativeTools,
       maxTokensOmitted: this.omitMaxTokens,
-      payloadReduced: this.reducedPayload
+      payloadReduced: this.reducedPayload,
+      apiStyle: this.apiStyle
     };
   }
 
@@ -351,8 +378,10 @@ export class OpenAICompatibleProvider implements AIProvider {
    * of request it will answer. Both discoveries stick for the session.
    */
   private async attempt(request: ChatRequest, mode: WireMode, handlers?: StreamHandlers): Promise<ChatResponse> {
-    const run = (req: ChatRequest) =>
-      handlers ? this.streamOnce(req, handlers, mode) : this.sendOnce(req, mode);
+    const run = (req: ChatRequest) => {
+      if (this.apiStyle === 'responses') return this.sendViaResponses(req, mode);
+      return handlers ? this.streamOnce(req, handlers, mode) : this.sendOnce(req, mode);
+    };
 
     const shaped = this.reducedPayload ? shrinkRequest(request) : request;
     const first = await run(shaped);
@@ -382,7 +411,55 @@ export class OpenAICompatibleProvider implements AIProvider {
         return retry;
       }
     }
+
+    // C. The provider may route this model through /v1/responses instead.
+    if (this.apiStyle === 'chat') {
+      try {
+        log.warn('Empty reply from /chat/completions; trying the /responses shape', { model: this.settings.model });
+        handlers?.onRestart?.();
+        const retry = await this.sendViaResponses(request, mode);
+        if (!this.isSilent(retry)) {
+          this.apiStyle = 'responses';
+          log.warn('Endpoint answers on /v1/responses; using it from now on', { model: this.settings.model });
+          return retry;
+        }
+      } catch (err) {
+        log.warn('The /responses shape is not available here', { reason: (err as Error).message });
+      }
+    }
     return first;
+  }
+
+  /** One attempt against the newer /v1/responses shape. */
+  private async sendViaResponses(request: ChatRequest, mode: WireMode): Promise<ChatResponse> {
+    const textMode = mode !== 'native';
+    const messages = textMode && request.tools?.length
+      ? withTextToolProtocol(request.messages, request.tools)
+      : request.messages;
+    const body = buildResponsesBody(
+      this.settings.model,
+      mode === 'forced' ? withForcedBlock(messages) : messages,
+      textMode ? undefined : request.tools,
+      this.tokenBudget(request),
+      request.temperature ?? this.settings.temperature
+    );
+
+    const res = await this.fetchWithRetry(
+      this.url('/responses'),
+      { method: 'POST', headers: this.headers(), body: JSON.stringify(body) },
+      request.signal
+    );
+    let json: any;
+    try {
+      json = await res.json();
+    } catch {
+      throw new AIProviderError('Provider returned a non-JSON response.', res.status, false, 'invalid_response');
+    }
+    const parsed = parseResponsesJson(json);
+    this.tokens.requests += 1;
+    this.tokens.inputTokens += parsed.usage.inputTokens;
+    this.tokens.outputTokens += parsed.usage.outputTokens;
+    return { ...parsed, raw: json };
   }
 
   private textCalls(request: ChatRequest, content: string): number {
@@ -644,6 +721,88 @@ export class OpenAICompatibleProvider implements AIProvider {
       const e = err as AIProviderError;
       return { ok: false, message: e.message, models: [] };
     }
+  }
+
+  /**
+   * Try every model the endpoint lists until one actually answers.
+   *
+   * A gateway that accepts a request for a model it does not host returns a
+   * polite empty completion, which looks identical to a broken app. Rather
+   * than asking the user to guess, probe the real catalogue.
+   */
+  async findWorkingSetup(signal?: AbortSignal): Promise<{
+    ok: boolean;
+    model?: string;
+    apiStyle?: 'chat' | 'responses';
+    toolCalling?: boolean;
+    tried: { model: string; result: string }[];
+    models: string[];
+    message: string;
+  }> {
+    const models = await this.getModels();
+    const tried: { model: string; result: string }[] = [];
+    if (!models.length) {
+      return {
+        ok: false,
+        tried,
+        models,
+        message:
+          'The endpoint did not return a model list, so there is nothing to choose from. Check the base URL ' +
+          'and the API key: with a wrong key most gateways answer /v1/models with an error.'
+      };
+    }
+
+    const current = this.settings.model;
+    const candidates = [current, ...rankModels(models, current)].filter(
+      (model, index, all) => model && all.indexOf(model) === index
+    );
+
+    const original = { model: this.settings.model, style: this.apiStyle };
+    for (const model of candidates.slice(0, 12)) {
+      if (signal?.aborted) break;
+      this.settings = { ...this.settings, model };
+      for (const style of ['chat', 'responses'] as const) {
+        this.apiStyle = style;
+        try {
+          const probe = await this.sendMessage({
+            messages: [{ role: 'user', content: 'Reply with the single word: ready' }],
+            maxTokens: 512,
+            temperature: 0,
+            signal
+          });
+          if (probe.content.trim() || probe.reasoning?.trim()) {
+            const toolCalling = await this.probeToolCalling();
+            tried.push({ model, result: `works via /${style === 'chat' ? 'chat/completions' : 'responses'}` });
+            return {
+              ok: true,
+              model,
+              apiStyle: style,
+              toolCalling,
+              tried,
+              models,
+              message:
+                `\`${model}\` answers via /${style === 'chat' ? 'chat/completions' : 'responses'}. ` +
+                (toolCalling ? 'It supports tool calling.' : 'It needs the textual tool protocol, which the app handles.')
+            };
+          }
+          tried.push({ model, result: `empty reply via /${style === 'chat' ? 'chat/completions' : 'responses'}` });
+        } catch (err) {
+          tried.push({ model, result: (err as AIProviderError).message.slice(0, 80) });
+        }
+      }
+    }
+
+    this.settings = { ...this.settings, model: original.model };
+    this.apiStyle = original.style;
+    return {
+      ok: false,
+      tried,
+      models,
+      message:
+        `None of the ${tried.length} attempts produced text. The endpoint lists ${models.length} model(s) but ` +
+        'answers nothing for them, which points at the account rather than the app — check the balance and ' +
+        'the key permissions in the provider dashboard.'
+    };
   }
 
   /**

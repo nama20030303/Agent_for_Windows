@@ -48,6 +48,10 @@ export class MockProvider implements AIProvider {
     };
   }
 
+  async findWorkingSetup() {
+    return { ok: true, model: this.settings.model, apiStyle: 'chat' as const, tried: [], models: [this.settings.model], message: 'mock' };
+  }
+
   async sendMessage(request: ChatRequest): Promise<ChatResponse> {
     return this.next(request);
   }

@@ -68,6 +68,16 @@ export interface NexusApi {
       models?: string[];
       toolCalling?: boolean;
     }>;
+    /** Probe the provider's real catalogue and switch to a model that answers. */
+    findWorkingModel(): Promise<{
+      ok: boolean;
+      model?: string;
+      apiStyle?: 'chat' | 'responses';
+      toolCalling?: boolean;
+      tried: { model: string; result: string }[];
+      models: string[];
+      message: string;
+    }>;
     detectProvider(input: { apiKey?: string; model?: string }): Promise<DetectionResult>;
     setPermissionMode(mode: PermissionMode): Promise<void>;
   };
@@ -142,6 +152,7 @@ export const IPC = {
   settingsHasApiKey: 'settings:hasApiKey',
   settingsTest: 'settings:test',
   settingsDetect: 'settings:detect',
+  settingsFindModel: 'settings:find-model',
   settingsPermissionMode: 'settings:permissionMode',
   workspacePick: 'workspace:pick',
   workspaceOpen: 'workspace:open',

@@ -44,6 +44,7 @@ const previewApi: NexusApi = {
     setApiKey: notAvailable,
     hasApiKey: async () => false,
     testConnection: async () => ({ ok: false, message: 'Preview mode: no desktop backend is connected.' }),
+    findWorkingModel: async () => ({ ok: false, tried: [], models: [], message: 'Preview build: no provider access.' }),
     detectProvider: async () => ({
       ok: false,
       reachable: [],

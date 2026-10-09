@@ -141,9 +141,9 @@ export function diagnoseEmptyResponse(
 
   return (
     `${where} returned an empty response (finish reason: ${response.finishReason}).${already} ` +
-    'The endpoint answers but produces no text, which almost always means the model name is routed ' +
-    'nowhere by the provider. Open Settings, press "Test connection" to list the models the endpoint ' +
-    'actually exposes, and pick one of those.'
+    'The endpoint answers but produces no text, which almost always means this model name is routed ' +
+    'nowhere by the provider. Open Settings and press "Find a working model": the app will ask the ' +
+    'provider which models it really hosts, try them, and switch to the first one that replies.'
   );
 }
 

@@ -86,6 +86,17 @@ so. Two ways forward:
   a fenced `tool_call` block containing `{ "tool": "write_file", "arguments": { ... } }`.
   This is less reliable, since it depends on the model following the format.
 
+**Nothing comes back, whatever the app tries**
+Open Settings and press **"Find a working model"**. The app asks the endpoint for its real catalogue
+(`GET /v1/models`), tries the configured model first and then the most promising ones, on both
+`/v1/chat/completions` and `/v1/responses`, and keeps the first combination that produces text —
+saving it to your settings. A gateway answers a request for a model it does not host with a polite
+empty completion, so this is usually the whole problem: the model name is not one the provider
+routes anywhere.
+
+If every model comes back empty, the endpoint hosts nothing for your key: check the balance and the
+key's permissions in the provider dashboard.
+
 **The provider answers with silence**
 The app looks for a request shape the endpoint will answer, in this order, and remembers what worked:
 1. the textual tool protocol (when tools were in play);
