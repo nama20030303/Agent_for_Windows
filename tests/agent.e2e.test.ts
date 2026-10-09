@@ -4,6 +4,7 @@ import path from 'node:path';
 import { MockProvider, type ScriptedTurn } from './helpers/mockProvider.js';
 import { buildHarness, tempDir, removeTempDir } from './helpers/harness.js';
 import type { AgentEvent } from '../src/core/shared/types.js';
+import { AIProviderError } from '../src/core/ai/provider.js';
 
 const shell = process.platform === 'win32' ? 'powershell' : 'bash';
 const cleanups: (() => void)[] = [];
@@ -384,5 +385,41 @@ describe('agent loop — end to end', () => {
     expect(error.message).toMatch(/Authentication failed/);
     expect(harness.agent.getState(harness.sessionId)).toBe('FAILED');
     expect(harness.sessions.listSessions().length).toBe(1);
+  }, 60_000);
+});
+
+describe('when the provider falls over mid-run', () => {
+  // A real session died on a passing 503 after creating five directories and
+  // was reported as FAILED, which reads as "your task is lost".
+  it('keeps the work, reports BLOCKED, and offers to continue', async () => {
+    const root = tempDir('nexus-503-');
+    cleanups.push(() => removeTempDir(root));
+
+    const provider = new MockProvider((_request, turn) => {
+      if (turn === 0) return { content: 'Starting.', toolCalls: [{ name: 'create_directory', arguments: { path: 'app' } }] };
+      throw new AIProviderError('Provider error (503). Retrying with backoff.', 503, true, 'server');
+    });
+
+    const harness = await buildHarness({ provider, workspaceRoot: root, permissionMode: 'autonomous', autoApprove: true });
+    cleanups.push(harness.cleanup);
+
+    await harness.agent.run({
+      sessionId: harness.sessionId,
+      projectId: harness.projectId,
+      workspaceRoot: root,
+      mode: 'agent',
+      shell: shell as 'bash',
+      userMessage: 'build the project'
+    });
+
+    expect(fs.existsSync(path.join(root, 'app'))).toBe(true);
+    expect(harness.agent.getState(harness.sessionId)).toBe('BLOCKED');
+
+    const error = harness.events.find((e) => e.type === 'error') as Extract<AgentEvent, { type: 'error' }>;
+    expect(error.message).toContain('503');
+    expect(error.message).toMatch(/say "continue" to resume/i);
+
+    const states = harness.events.filter((e) => e.type === 'agent_state_change').map((e: any) => e.state);
+    expect(states, 'an overloaded provider is not a failed task').not.toContain('FAILED');
   }, 60_000);
 });

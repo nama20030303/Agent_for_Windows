@@ -26,7 +26,12 @@ export function redactSecrets(input: string): string {
     re.lastIndex = 0;
     out =
       name === 'assignment'
-        ? out.replace(re, (_m, key) => `${key}=${REDACTION}`)
+        ? out.replace(re, (match, key: string, value: string) =>
+            // A plain number is a count, not a credential. Without this, a
+            // line like "Tokens: 184203 in" was redacted in the diagnostics
+            // report and the reader lost real information for nothing.
+            /^[0-9]+$/.test(value) ? match : `${key}=${REDACTION}`
+          )
         : out.replace(re, REDACTION);
   }
   return out;

@@ -88,7 +88,7 @@ export function buildDiagnosticsReport(state: UiSnapshot, appVersion: string): s
     `Streaming: ${ai?.streaming ?? '?'} · max tokens: ${ai?.maxTokens ?? '?'} · temperature: ${ai?.temperature ?? '?'}`,
     `Permission mode: ${state.settings?.permissionMode ?? '?'} · shell: ${state.settings?.shell ?? '?'}`,
     `Workspace: ${state.workspace ? `${state.workspace.name} (${state.index?.fileCount ?? '?'} files)` : 'none open'}`,
-    `Tokens: ${state.usage.inputTokens} in / ${state.usage.outputTokens} out over ${state.usage.requests} requests`,
+    `Usage: ${state.usage.inputTokens} input, ${state.usage.outputTokens} output, over ${state.usage.requests} requests`,
     '',
     '### What the agent did',
     ...(state.turns.map(turnLine).filter(Boolean).slice(-40) as string[]),

@@ -231,7 +231,11 @@ export class OpenAICompatibleProvider implements AIProvider {
 
   constructor(
     public settings: AIProviderSettings,
-    private retry: RetryOptions = { retries: 3, baseDelayMs: 800 }
+    // A busy upstream (429/503) routinely needs more than a couple of
+    // seconds to come back. Five attempts with exponential backoff spans
+    // about half a minute, which costs nothing when the first try works and
+    // saves a long agent run when it does not.
+    private retry: RetryOptions = { retries: 5, baseDelayMs: 900 }
   ) {}
 
   describe(): {
@@ -278,6 +282,7 @@ export class OpenAICompatibleProvider implements AIProvider {
 
   private async fetchWithRetry(url: string, init: RequestInit, signal?: AbortSignal): Promise<Response> {
     let lastError: AIProviderError | null = null;
+    let retryAfterMs = 0;
     for (let attempt = 0; attempt <= this.retry.retries; attempt++) {
       const controller = new AbortController();
       const onAbort = () => controller.abort();
@@ -290,6 +295,10 @@ export class OpenAICompatibleProvider implements AIProvider {
         const error = mapHttpError(res.status, body);
         if (!error.retryable || attempt === this.retry.retries) throw error;
         lastError = error;
+        // The provider knows better than our backoff curve when it will be
+        // ready again.
+        const after = Number(res.headers.get('retry-after'));
+        if (Number.isFinite(after) && after > 0) retryAfterMs = Math.min(after * 1000, 30_000);
       } catch (err) {
         if (signal?.aborted) throw new AIProviderError('Request cancelled by the user.', undefined, false, 'cancelled');
         const e = err as Error;
@@ -307,7 +316,8 @@ export class OpenAICompatibleProvider implements AIProvider {
         clearTimeout(timer);
         signal?.removeEventListener('abort', onAbort);
       }
-      const delay = this.retry.baseDelayMs * 2 ** attempt + Math.random() * 200;
+      const delay = retryAfterMs || this.retry.baseDelayMs * 2 ** attempt + Math.random() * 200;
+      retryAfterMs = 0;
       log.warn('Retrying provider request', { attempt: attempt + 1, delay: Math.round(delay), reason: lastError?.message });
       await new Promise((r) => setTimeout(r, delay));
     }

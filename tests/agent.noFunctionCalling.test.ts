@@ -411,3 +411,74 @@ describe('what the user sees in the chat', () => {
     expect(fs.readFileSync(path.join(root, 'c.py'), 'utf8')).toBe('name = "x"\n');
   }, 30_000);
 });
+
+describe('one call per message, many messages', () => {
+  // From a real diagnostics report: every line in the activity feed showed the
+  // outcome of the last call, because a textual call was always `text_call_0`.
+  it('gives every call its own identity so results land on the right line', async () => {
+    const root = tempDir('nexus-ids-');
+    cleanups.push(() => removeTempDir(root));
+
+    const block = (call: unknown) => '```tool_call\n' + JSON.stringify(call) + '\n```';
+    const provider = new MockProvider([
+      { content: block({ tool: 'create_directory', arguments: { path: 'app' } }) },
+      { content: block({ tool: 'create_directory', arguments: { path: 'app/core' } }) },
+      { content: block({ tool: 'create_directory', arguments: { path: 'app/ui' } }) },
+      { content: block({ tool: 'finish', arguments: { report: 'Layout created.', success: true } }) }
+    ]);
+
+    const harness = await buildHarness({ provider, workspaceRoot: root, permissionMode: 'autonomous', autoApprove: true });
+    cleanups.push(harness.cleanup);
+
+    await harness.agent.run({
+      sessionId: harness.sessionId,
+      projectId: harness.projectId,
+      workspaceRoot: root,
+      mode: 'agent',
+      shell: 'bash',
+      userMessage: 'create the layout'
+    });
+
+    const ids = harness.events.filter((e: any) => e.type === 'tool_call').map((e: any) => e.call.id);
+    expect(new Set(ids).size, 'every call needs a distinct id').toBe(ids.length);
+
+    // Each result must describe its own directory, not the last one created.
+    const results = harness.events.filter((e: any) => e.type === 'tool_result' && e.result?.tool === 'create_directory') as any[];
+    const summaries = results.map((e) => e.result.summary ?? '').join('\n');
+    expect(summaries).toContain('app/core');
+    expect(summaries).toContain('app/ui');
+
+    // And the pairing is sound: result ids are the call ids, one for one.
+    const resultIds = harness.events.filter((e: any) => e.type === 'tool_result').map((e: any) => e.callId);
+    expect(new Set(resultIds).size).toBe(resultIds.length);
+    for (const id of resultIds) expect(ids).toContain(id);
+  }, 30_000);
+
+  it('closes off planning steps instead of leaving them running forever', async () => {
+    const root = tempDir('nexus-meta-');
+    cleanups.push(() => removeTempDir(root));
+
+    const block = (call: unknown) => '```tool_call\n' + JSON.stringify(call) + '\n```';
+    const provider = new MockProvider([
+      { content: block({ tool: 'record_requirements', arguments: { summary: 'Build it.', requirements: [], assumptions: [] } }) },
+      { content: block({ tool: 'write_file', arguments: { path: 'a.txt', content: 'x\n' } }) },
+      { content: block({ tool: 'finish', arguments: { report: 'Done.', success: true } }) }
+    ]);
+
+    const harness = await buildHarness({ provider, workspaceRoot: root, permissionMode: 'autonomous', autoApprove: true });
+    cleanups.push(harness.cleanup);
+
+    await harness.agent.run({
+      sessionId: harness.sessionId,
+      projectId: harness.projectId,
+      workspaceRoot: root,
+      mode: 'agent',
+      shell: 'bash',
+      userMessage: 'build it'
+    });
+
+    const started = harness.events.filter((e: any) => e.type === 'tool_call').map((e: any) => e.call.id);
+    const finished = new Set(harness.events.filter((e: any) => e.type === 'tool_result').map((e: any) => e.callId));
+    for (const id of started) expect(finished.has(id), `call ${id} never reported a result`).toBe(true);
+  }, 30_000);
+});

@@ -107,6 +107,9 @@ function canonicalName(name: string, known?: Set<string>): string | null {
   return alias && known.has(alias) ? alias : null;
 }
 
+/** Monotonic, so two calls from two different replies never share an id. */
+let textCallCounter = 0;
+
 const FENCE = /```([a-zA-Z0-9_+-]*)[ \t]*\r?\n([\s\S]*?)```/g;
 const TOOL_NAME = /^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$/;
 
@@ -262,7 +265,12 @@ function readCall(
     if (unexpected.length) return { truncated: name };
   }
 
-  return { id: `text_call_${index}`, name, arguments: serialised };
+  // The id has to be unique for the lifetime of the session, not just within
+  // one reply. A model that sends one call per message produced `text_call_0`
+  // every single time, so the UI matched every result to the first call and
+  // showed the same outcome on every line.
+  textCallCounter += 1;
+  return { id: `text_call_${index}_${textCallCounter}`, name, arguments: serialised };
 }
 
 /** Every balanced `{...}` span in the text, outermost first. */

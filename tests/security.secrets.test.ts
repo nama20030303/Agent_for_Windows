@@ -38,3 +38,18 @@ describe('secret protection', () => {
     expect(isSensitiveFile('src/app.py')).toBe(false);
   });
 });
+
+describe('what redaction must not eat', () => {
+  // A diagnostics report said "Usage=************ in / 3332 out": the word
+  // "Tokens" matched the credential pattern and a plain count was hidden.
+  it('keeps plain counts readable', () => {
+    expect(redactSecrets('Tokens: 184203 in / 3332 out')).toContain('184203');
+    expect(redactSecrets('ACCESS_TOKEN_COUNT = 42')).toContain('42');
+  });
+
+  it('still hides an actual credential written the same way', () => {
+    const redacted = redactSecrets('API_KEY = hunter2secretvalue');
+    expect(redacted).not.toContain('hunter2secretvalue');
+    expect(redactSecrets('ACCESS_TOKEN: abc123def456ghi')).not.toContain('abc123def456ghi');
+  });
+});

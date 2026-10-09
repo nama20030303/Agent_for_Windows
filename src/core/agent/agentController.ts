@@ -455,8 +455,27 @@ export class AgentController {
     } catch (err) {
       const message = err instanceof AIProviderError ? err.message : (err as Error).message;
       log.error('Agent run failed', { reason: message });
-      this.emit({ type: 'error', sessionId: options.sessionId, message });
-      this.emitState(options.sessionId, 'FAILED', message);
+
+      // An overloaded or rate-limited provider is not a failed task. The work
+      // already done is on disk and in the session, so the run is reported as
+      // blocked and the user is told it can simply be continued. Calling this
+      // FAILED threw away a long run over a passing 503.
+      const transient = err instanceof AIProviderError && (err.kind === 'server' || err.kind === 'rate_limit' || err.kind === 'timeout');
+      if (transient) {
+        const done = rt.filesCreated.size + rt.filesModified.size + rt.filesDeleted.size;
+        this.emit({
+          type: 'error',
+          sessionId: options.sessionId,
+          message:
+            `${message} The provider is busy or unreachable right now, so the agent stopped between steps. ` +
+            `Nothing was lost${done ? ` — ${done} file(s) already changed are saved` : ''}: say "continue" to ` +
+            'resume from where it stopped.'
+        });
+        this.emitState(options.sessionId, 'BLOCKED', 'The provider is unavailable. The session can be resumed.');
+      } else {
+        this.emit({ type: 'error', sessionId: options.sessionId, message });
+        this.emitState(options.sessionId, 'FAILED', message);
+      }
     } finally {
       rt.running = false;
       rt.abort = undefined;
@@ -615,7 +634,11 @@ export class AgentController {
       // Planning, analysis and reporting are work the user should see too: a
       // run that only analysed requirements used to look like a dead app.
       this.emit({ type: 'tool_call', sessionId: options.sessionId, call, risk: 'SAFE' });
-      return this.handleMetaTool(call, options, rt, signal, maxRepairAttempts);
+      const outcome = await this.handleMetaTool(call, options, rt, signal, maxRepairAttempts);
+      // And it has to be closed off, or the line sits at "still running" for
+      // the rest of the session.
+      this.emit({ type: 'tool_result', sessionId: options.sessionId, callId: call.id, result: outcome.result });
+      return outcome;
     }
 
     this.emitState(options.sessionId, 'RUNNING_TOOL', call.name);
@@ -876,9 +899,6 @@ export class AgentController {
               'needs no changes, call `finish` again with success=false and say plainly what is missing.',
             errorType: 'UNKNOWN_ERROR'
           };
-          // Meta tools are normally silent, but the user must see the agent
-          // catching itself reporting a job it never did.
-          this.emit({ type: 'tool_result', sessionId, callId: call.id, result: refusal });
           return { result: refusal, pause: false, finish: false };
         }
         if (touchedNothing) {

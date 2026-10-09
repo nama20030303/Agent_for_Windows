@@ -32,6 +32,12 @@ you why. The usual causes:
 - *Wrong base URL* — a host that answers 200 with a different payload shape yields empty replies.
   Use *Test connection*.
 
+**"Provider error (503)" and the run stops**
+The endpoint is overloaded or briefly unreachable. The app retries five times with growing pauses,
+honouring the provider's own `Retry-After` when it sends one. If it still cannot get through, the
+session is reported as **blocked**, not failed: every file already written is on disk and the
+session is intact. Say *continue* and the agent picks up where it stopped.
+
 **Something went wrong and you want to report it**
 Press **Copy diagnostics** on the red error message, or run *Copy diagnostics* from the command
 palette (Ctrl+P). It copies one block of text: app build, endpoint host, model id, whether a key is
