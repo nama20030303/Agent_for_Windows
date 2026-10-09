@@ -232,6 +232,7 @@ export class AgentController {
     let emptyResponses = 0;
     let proseOnlyReplies = 0;
     let invented = 0;
+    let cutOff = 0;
 
     try {
       const endpoint = this.deps.provider.describe();
@@ -263,10 +264,25 @@ export class AgentController {
           // Invented names from either channel: losing them would turn a
           // correctable mistake into a dead run.
           const unknownTools = [...new Set([...fromText.unknownTools, ...(fromReasoning?.unknownTools ?? [])])];
+          const truncated = [...new Set([...fromText.truncatedCalls, ...(fromReasoning?.truncatedCalls ?? [])])];
           if (found.calls.length) {
             response.toolCalls = found.calls;
             if (fromText.calls.length) response.content = found.cleaned;
             this.timeline(options.sessionId, `Interpreted ${found.calls.length} textual tool call(s) from the model`);
+          } else if (truncated.length && cutOff < 2) {
+            // The call was cut off mid-JSON. Running it would write half a
+            // file, so ask for it again in pieces the model can finish.
+            cutOff += 1;
+            rt.history.push({
+              role: 'user',
+              content:
+                `Your \`${truncated[0]}\` call was cut off in the middle of the JSON, so nothing was run. ` +
+                'The content was too long for one reply. Send it again in smaller pieces: create the file ' +
+                'with a short first part, then extend it with further calls. Never put more than about 150 ' +
+                'lines in one call.'
+            });
+            this.timeline(options.sessionId, `Model's ${truncated[0]} call was truncated; asking for smaller pieces`);
+            continue;
           } else if (unknownTools.length && invented < 2) {
             // It used the protocol correctly but invented a tool. Name the real
             // ones and let it try again instead of failing the run.
@@ -829,6 +845,7 @@ export class AgentController {
     let emptyResponses = 0;
     let proseOnlyReplies = 0;
     let invented = 0;
+    let cutOff = 0;
     try {
       for (let i = 0; i < maxIterations; i++) {
         if (abort.signal.aborted) break;

@@ -32,6 +32,16 @@ you why. The usual causes:
 - *Wrong base URL* — a host that answers 200 with a different payload shape yields empty replies.
   Use *Test connection*.
 
+**The model sends a command but nothing happens**
+Fixed in build 20. Two shapes of almost-valid JSON were being thrown away:
+- **unescaped quotes and raw newlines** inside an argument, which is what happens whenever a model
+  pastes source code (`println!("hi")`) into `content`. The call is now parsed key by key, trying
+  each plausible end of the string and keeping the one the rest of the object agrees with;
+- **a reply cut off mid-JSON** by the output limit. Such a call is detected but deliberately **not
+  run** — writing half a file is worse than writing none. The model is told its call was truncated
+  and asked to build the file from several smaller calls (about 150 lines each), and the run
+  continues.
+
 **The agent explains the work instead of doing it**
 The app escalates on its own, inside a single turn:
 1. normal request with native function calling;

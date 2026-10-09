@@ -236,3 +236,49 @@ describe('a model that invents a tool name mid-run', () => {
     expect(states).toContain('COMPLETED');
   }, 30_000);
 });
+
+describe('a model whose call is cut off by the output limit', () => {
+  it('is asked for smaller pieces instead of writing half a file', async () => {
+    const root = tempDir('nexus-truncated-');
+    cleanups.push(() => removeTempDir(root));
+
+    const provider = new MockProvider([
+      // Cut off in the middle of the JSON, exactly as a long file arrives.
+      { content: '```tool_call\n{"tool": "write_file", "arguments": {"path": "main.rs", "content": "//! Nexus\nfn main() { println!("start");' },
+      {
+        content:
+          'Shorter now.\n\n```tool_call\n' +
+          JSON.stringify({ tool: 'write_file', arguments: { path: 'main.rs', content: 'fn main() {}\n' } }) +
+          '\n```'
+      },
+      {
+        content: 'Done.\n\n```tool_call\n' + JSON.stringify({ tool: 'finish', arguments: { report: 'Created main.rs', success: true, verified: false } }) + '\n```'
+      }
+    ]);
+
+    const harness = await buildHarness({ provider, workspaceRoot: root, permissionMode: 'autonomous', autoApprove: true });
+    cleanups.push(harness.cleanup);
+
+    await harness.agent.run({
+      sessionId: harness.sessionId,
+      projectId: harness.projectId,
+      workspaceRoot: root,
+      mode: 'agent',
+      shell: 'bash',
+      userMessage: 'create main.rs'
+    });
+
+    // The half-written content must never have reached the disk.
+    const written = fs.readFileSync(path.join(root, 'main.rs'), 'utf8');
+    expect(written).toBe('fn main() {}\n');
+
+    const history = provider.requests[0].messages;
+    const nudge = history.find((m) => m.content.includes('cut off in the middle of the JSON'));
+    expect(nudge, 'the model must be told why nothing ran').toBeTruthy();
+    expect(nudge!.content).toContain('150 lines');
+
+    const states = harness.events.filter((e) => e.type === 'agent_state_change').map((e: any) => e.state);
+    expect(states).toContain('COMPLETED');
+    expect(states).not.toContain('BLOCKED');
+  }, 30_000);
+});

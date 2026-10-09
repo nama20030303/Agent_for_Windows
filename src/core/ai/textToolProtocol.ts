@@ -71,6 +71,8 @@ export function describeToolsAsText(tools: ToolDefinition[]): string {
     '- One call per message. Stop after the block and wait for its result; the result arrives as the next message.',
     '- Writing code in a normal answer changes nothing on disk. Only the block above does.',
     '- When the whole task is done, call the `finish` tool the same way.',
+    '- Keep each call small: at most about 150 lines of file content. Build a long file with several',
+    '  calls instead of one huge call, otherwise the reply is cut off and nothing runs.',
     '',
     'Available tools:',
     ...lines
