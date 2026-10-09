@@ -32,6 +32,19 @@ you why. The usual causes:
 - *Wrong base URL* — a host that answers 200 with a different payload shape yields empty replies.
   Use *Test connection*.
 
+**Something went wrong and you want to report it**
+Press **Copy diagnostics** on the red error message, or run *Copy diagnostics* from the command
+palette (Ctrl+P). It copies one block of text: app build, endpoint host, model id, whether a key is
+configured, the agent's state, the last forty things it did with the real error text and exit codes
+of anything that failed, and the recent timeline. Secrets are stripped from it with the same
+redaction used for logs, so it is safe to paste into an issue.
+
+**The chat shows JSON instead of sentences**
+It no longer does. A tool call is machinery, so it is removed from the message and shown in the
+activity feed instead, as a line like *Created src/app.py* or *Ran npm test* that expands to the
+diff or the output. This also holds for a call the app could not read: the model's own sentences
+stay, the broken JSON goes.
+
 **The agent analysed the task, said it was finished, and the folder is empty**
 Two separate faults produced this, both fixed in build 25. A Windows path written into a tool call
 — `%APPDATA%\NexusCode\` or `C:\Users\me` — is not valid JSON, because `\N` and `\U` are not

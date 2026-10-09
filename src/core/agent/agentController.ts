@@ -240,6 +240,8 @@ export class AgentController {
     let invented = 0;
     let cutOff = 0;
     let malformedReplies = 0;
+    /** The last reply carried a tool call the app could not read. */
+    let brokenCall = false;
 
     try {
       const endpoint = this.deps.provider.describe();
@@ -279,9 +281,14 @@ export class AgentController {
           // correctable mistake into a dead run.
           const unknownTools = [...new Set([...fromText.unknownTools, ...(fromReasoning?.unknownTools ?? [])])];
           const truncated = [...new Set([...fromText.truncatedCalls, ...(fromReasoning?.truncatedCalls ?? [])])];
+          // The call text itself is never shown to the user, whether or not it
+          // could be run: the chat shows what happened, the activity feed
+          // shows the call.
+          response.content = fromText.cleaned;
+          brokenCall = fromText.malformed || truncated.length > 0 || unknownTools.length > 0;
+
           if (found.calls.length) {
             response.toolCalls = found.calls;
-            if (fromText.calls.length) response.content = found.cleaned;
             this.timeline(options.sessionId, `Interpreted ${found.calls.length} textual tool call(s) from the model`);
           } else if (fromText.malformed && malformedReplies < 2) {
             // It used the protocol, but the JSON would not parse — almost
@@ -383,6 +390,24 @@ export class AgentController {
             rt.history.push({ role: 'user', content: EMPTY_RESPONSE_NUDGE });
             this.timeline(options.sessionId, 'Model returned an empty response; retrying once');
             continue;
+          }
+
+          // The reply was not empty: it was a tool call the app could not read
+          // and therefore removed from the message. Saying "the endpoint
+          // returned nothing" would send the user hunting the wrong problem.
+          if (brokenCall) {
+            this.emit({
+              type: 'error',
+              sessionId: options.sessionId,
+              message:
+                'The model kept sending tool calls this app could not read, so nothing was run. Its last ' +
+                'replies contained a call whose JSON was broken — usually an unescaped quote, line break or ' +
+                'backslash inside file content. The full text is in the activity timeline. Try a model ' +
+                'advertised with "Function Calling" / "Tools", or ask for a smaller change so the call fits ' +
+                'in one reply.'
+            });
+            this.emitState(options.sessionId, 'BLOCKED', 'The model\'s tool calls could not be read.');
+            break;
           }
 
           const diagnosis = diagnoseEmptyResponse(response, this.deps.provider.describe());

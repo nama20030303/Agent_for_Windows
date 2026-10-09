@@ -321,6 +321,8 @@ code, pre, .mono { font-family: var(--font-mono); font-size: 12.5px; }
 .banner.ok { border-color: color-mix(in srgb, var(--success) 45%, transparent); color: var(--success); }
 .banner.err { border-color: color-mix(in srgb, var(--danger) 45%, transparent); color: var(--danger); }
 .banner.info { color: var(--text-muted); }
+.banner-action { margin-top: 8px; padding: 3px 10px; font-size: 12px; border-radius: var(--radius-sm); border: 1px solid currentColor; color: inherit; background: transparent; cursor: pointer; }
+.banner-action:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
 
 .empty { color: var(--text-faint); font-size: 12.5px; padding: 10px; text-align: center; }
 

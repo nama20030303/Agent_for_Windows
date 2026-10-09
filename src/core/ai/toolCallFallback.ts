@@ -328,6 +328,11 @@ export function extractTextToolCalls(
   const remove: string[] = [];
 
   const accept = (result: RawToolCall | UnknownToolCall | TruncatedToolCall | null, block: string): boolean => {
+    // Whatever happens to it, a block that was meant as a tool call is
+    // machinery, not conversation: it is taken out of the visible message
+    // even when it could not be run. Printing raw JSON at the user explains
+    // nothing and hides the one sentence the model actually wrote.
+    if (/"(?:tool|name|tool_name|function)"\s*:/.test(block)) remove.push(block);
     if (!result) return false;
     if (isTruncated(result)) {
       if (!truncatedCalls.includes(result.truncated)) truncatedCalls.push(result.truncated);
@@ -338,7 +343,7 @@ export function extractTextToolCalls(
       return false;
     }
     calls.push(result);
-    remove.push(block);
+    if (!remove.includes(block)) remove.push(block);
     return true;
   };
 

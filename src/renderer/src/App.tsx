@@ -23,6 +23,7 @@ import { CodeViewer } from './components/CodeViewer.js';
 import { CommandPalette, type Command } from './components/CommandPalette.js';
 import { SettingsDialog } from './components/SettingsDialog.js';
 import { Onboarding } from './components/Onboarding.js';
+import { buildDiagnosticsReport } from './state/diagnostics.js';
 import type { AgentEvent, ManagedProcess } from '../../core/shared/types.js';
 
 export default function App() {
@@ -160,6 +161,29 @@ export default function App() {
 
   /* ----------------------------------------------------- shortcuts */
 
+  /**
+   * Everything a maintainer needs to understand a failed run, on the
+   * clipboard in one click: configuration, what the agent actually did, and
+   * where it stopped. Secrets are stripped before it leaves the app.
+   */
+  const copyDiagnostics = useCallback(async () => {
+    let version = 'unknown';
+    try {
+      version = await api.app.version();
+    } catch {
+      /* the browser preview has no main process */
+    }
+    const report = buildDiagnosticsReport(getState(), version);
+    try {
+      await navigator.clipboard.writeText(report);
+      toast('ok', 'Diagnostics copied — paste them into the bug report');
+    } catch {
+      // Clipboard permission can be refused; the report is useless if it
+      // cannot leave the app, so show it instead.
+      setState({ openFile: { path: 'diagnostics.md', content: report } });
+    }
+  }, []);
+
   const commands = useMemo<Command[]>(
     () => [
       { id: 'open', title: 'Open project…', hint: 'Ctrl+O', run: async () => {
@@ -185,6 +209,7 @@ export default function App() {
       { id: 'git', title: 'Git status', run: () => void send('Show the current git status and summarise uncommitted changes.') },
       { id: 'stop', title: 'Stop agent', hint: 'Esc', run: stop },
       { id: 'settings', title: 'Settings', run: () => setState({ showSettings: true }) },
+      { id: 'diagnostics', title: 'Copy diagnostics', run: copyDiagnostics },
       { id: 'theme', title: 'Toggle theme', run: async () => {
           const next = (getState().settings?.theme === 'dark' ? 'light' : 'dark') as 'dark' | 'light';
           document.documentElement.dataset.theme = next;
@@ -192,7 +217,7 @@ export default function App() {
           setState({ settings });
         } }
     ],
-    [newSession, send, stop]
+    [newSession, send, stop, copyDiagnostics]
   );
 
   useEffect(() => {
@@ -365,7 +390,10 @@ export default function App() {
                   case 'error':
                     return (
                       <div key={turn.id} className="banner err">
-                        {turn.message}
+                        <div>{turn.message}</div>
+                        <button className="banner-action" onClick={() => void copyDiagnostics()}>
+                          Copy diagnostics
+                        </button>
                       </div>
                     );
                   default:

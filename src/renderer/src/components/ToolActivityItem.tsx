@@ -19,41 +19,99 @@ const ICON: Record<string, string> = {
   git_status: '⑂',
   git_diff: '⑂',
   git_commit: '⑂',
-  http_check: '⇄'
+  http_check: '⇄',
+  append_file: '✎',
+  create_directory: '▤',
+  move_file: '→',
+  copy_file: '⧉',
+  record_requirements: '☰',
+  present_plan: '☰',
+  verify_work: '✓',
+  create_checkpoint: '⎙',
+  update_task: '☰',
+  remember: '☰',
+  finish: '■',
+  ask_user: '?'
 };
 
+/**
+ * What the line says in the conversation. While a call runs it is written in
+ * the present tense, and once it is done in the past tense with the outcome,
+ * so the transcript reads as a record of what happened: "Created src/app.py",
+ * "Ran npm test". The call's JSON is never shown here; it is in the body.
+ */
 function label(activity: ToolActivity): string {
-  const { call } = activity;
+  const { call, result } = activity;
   const a = call.arguments as Record<string, any>;
+  const done = !!result;
+  const failed = done && !result!.success;
+  const data = (result?.data ?? {}) as Record<string, any>;
+
+  // A failed call never claims the thing happened.
+  const past = (verb: string, present: string) => (!done ? present : failed ? `${present} — failed` : verb);
+
   switch (call.name) {
     case 'read_file':
-      return `Reading ${a.path}`;
+      return past(`Read ${a.path}`, `Reading ${a.path}`);
     case 'write_file':
-      return `Writing ${a.path}`;
+      return past(data.created === false ? `Rewrote ${a.path}` : `Created ${a.path}`, `Writing ${a.path}`);
+    case 'append_file':
+      return past(data.created ? `Created ${a.path}` : `Extended ${a.path}`, `Extending ${a.path}`);
     case 'edit_file':
-      return `Editing ${a.path}`;
+      return past(`Edited ${a.path}`, `Editing ${a.path}`);
     case 'delete_file':
-      return `Deleting ${a.path}`;
+      return past(`Deleted ${a.path}`, `Deleting ${a.path}`);
+    case 'move_file':
+      return past(`Moved ${a.from ?? a.source} to ${a.to ?? a.destination}`, `Moving ${a.from ?? a.source}`);
+    case 'copy_file':
+      return past(`Copied ${a.from ?? a.source} to ${a.to ?? a.destination}`, `Copying ${a.from ?? a.source}`);
     case 'create_directory':
-      return `Creating ${a.path}`;
+      return past(`Created folder ${a.path}`, `Creating folder ${a.path}`);
     case 'list_directory':
-      return `Listing ${a.path ?? '.'}`;
+      return past(`Listed ${a.path ?? '.'}`, `Listing ${a.path ?? '.'}`);
+    case 'file_exists':
+    case 'get_file_info':
+      return past(`Checked ${a.path}`, `Checking ${a.path}`);
     case 'search_text':
-      return `Searching "${a.query}"`;
+      return past(`Searched for "${a.query}"`, `Searching for "${a.query}"`);
     case 'search_files':
-      return `Finding files "${a.pattern}"`;
+      return past(`Looked for files "${a.pattern}"`, `Looking for files "${a.pattern}"`);
     case 'find_symbol':
-      return `Looking up ${a.name}`;
+      return past(`Looked up ${a.name}`, `Looking up ${a.name}`);
+    case 'find_references':
+      return past(`Found references to ${a.name}`, `Finding references to ${a.name}`);
     case 'execute_command':
-      return `Running ${a.command}`;
+      return past(`Ran ${a.command}`, `Running ${a.command}`);
     case 'run_tests':
-      return 'Running tests';
+      return past('Ran the tests', 'Running the tests');
     case 'run_build':
-      return 'Running build';
+      return past('Ran the build', 'Running the build');
+    case 'detect_test_framework':
+      return past('Detected the test framework', 'Detecting the test framework');
     case 'start_process':
-      return `Starting ${a.name}`;
+      return past(`Started ${a.name ?? a.command}`, `Starting ${a.name ?? a.command}`);
+    case 'stop_process':
+      return past(`Stopped ${a.name ?? a.id}`, `Stopping ${a.name ?? a.id}`);
     case 'http_check':
-      return `Checking ${a.url}`;
+      return past(`Checked ${a.url}`, `Checking ${a.url}`);
+    case 'git_commit':
+      return past('Committed the changes', 'Committing the changes');
+    case 'record_requirements':
+      return past('Analysed the requirements', 'Analysing the requirements');
+    case 'present_plan':
+      return past('Prepared a plan', 'Preparing a plan');
+    case 'update_task':
+      return `Task: ${a.title ?? a.id ?? 'updated'}`;
+    case 'verify_work':
+      return past('Verified the work', 'Verifying the work');
+    case 'create_checkpoint':
+      return past('Saved a checkpoint', 'Saving a checkpoint');
+    case 'remember':
+      return 'Noted something about the project';
+    case 'finish':
+      return failed ? 'Tried to finish too early' : 'Finished';
+    case 'ask_user':
+      return 'Asked a question';
     default:
       return call.name.replace(/_/g, ' ');
   }

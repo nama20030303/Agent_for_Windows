@@ -372,3 +372,42 @@ describe('the requirements-then-nothing session from the report', () => {
     expect(completion.report).not.toMatch(/Nothing on disk has changed/i);
   }, 30_000);
 });
+
+describe('what the user sees in the chat', () => {
+  it('never prints the raw tool call, whether or not it could be run', async () => {
+    const root = tempDir('nexus-chat-');
+    cleanups.push(() => removeTempDir(root));
+
+    const block = (call: unknown) => '```tool_call\n' + JSON.stringify(call) + '\n```';
+    const provider = new MockProvider([
+      // A good call, with a sentence around it.
+      { content: 'Creating the entry point.\n\n' + block({ tool: 'write_file', arguments: { path: 'main.py', content: 'print(1)\n' } }) },
+      // A broken one: an unescaped quote inside the content.
+      { content: 'Now the config.\n\n```tool_call\n{"tool": "write_file", "arguments": {"path": "c.py", "content": "name = "x""}}\n```' },
+      { content: 'Sorry.\n\n' + block({ tool: 'write_file', arguments: { path: 'c.py', content: 'name = "x"\n' } }) },
+      { content: 'Done.\n\n' + block({ tool: 'finish', arguments: { report: 'Created main.py and c.py.', success: true } }) }
+    ]);
+
+    const harness = await buildHarness({ provider, workspaceRoot: root, permissionMode: 'autonomous', autoApprove: true });
+    cleanups.push(harness.cleanup);
+
+    await harness.agent.run({
+      sessionId: harness.sessionId,
+      projectId: harness.projectId,
+      workspaceRoot: root,
+      mode: 'agent',
+      shell: 'bash',
+      userMessage: 'create main.py and c.py'
+    });
+
+    const shown = harness.events.filter((e: any) => e.type === 'assistant_message').map((e: any) => e.content);
+    for (const message of shown) {
+      expect(message, 'the chat must not contain call machinery').not.toMatch(/"tool"\s*:/);
+      expect(message).not.toContain('```tool_call');
+    }
+    // The model's own sentences survive the cleaning.
+    expect(shown.join('\n')).toContain('Creating the entry point.');
+    expect(shown.join('\n')).toContain('Now the config.');
+    expect(fs.readFileSync(path.join(root, 'c.py'), 'utf8')).toBe('name = "x"\n');
+  }, 30_000);
+});

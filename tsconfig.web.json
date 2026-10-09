@@ -1,6 +1,6 @@
 {
   "extends": "./tsconfig.base.json",
-  "include": ["src/renderer/**/*", "src/core/shared/types.ts", "src/core/shared/ipc.ts"],
+  "include": ["src/renderer/**/*", "src/core/shared/types.ts", "src/core/shared/ipc.ts", "src/core/shared/secrets.ts"],
   "compilerOptions": {
     "composite": true,
     "jsx": "react-jsx",
