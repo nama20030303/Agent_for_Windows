@@ -110,41 +110,58 @@ function canonicalName(name: string, known?: Set<string>): string | null {
 const FENCE = /```([a-zA-Z0-9_+-]*)[ \t]*\r?\n([\s\S]*?)```/g;
 const TOOL_NAME = /^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$/;
 
+/** The only characters JSON allows after a backslash. */
+const VALID_ESCAPES = new Set(['"', '\\', '/', 'b', 'f', 'n', 'r', 't', 'u']);
+
 /**
- * Make a model's near-JSON parseable: strip trailing commas and escape the raw
- * control characters it leaves inside strings when emitting file contents.
+ * Make a model's near-JSON parseable: strip trailing commas, escape the raw
+ * control characters it leaves inside strings when emitting file contents,
+ * and repair backslashes that do not start a valid escape.
+ *
+ * That last one is this application's own daily bread: a Windows path written
+ * into a JSON string, `"%APPDATA%\NexusCode\"` or `"C:\Users\me"`, is invalid
+ * JSON, and rejecting the call would mean the agent silently does nothing. A
+ * lone backslash can only have been meant literally, so it is doubled.
  */
 function repairJson(raw: string): string {
   let out = '';
   let inString = false;
-  let escaped = false;
 
-  for (const char of raw) {
-    if (escaped) {
+  for (let i = 0; i < raw.length; i += 1) {
+    const char = raw[i];
+
+    if (!inString) {
+      if (char === '"') inString = true;
       out += char;
-      escaped = false;
       continue;
     }
-    if (inString) {
-      if (char === '\\') {
-        out += char;
-        escaped = true;
-      } else if (char === '"') {
-        inString = false;
-        out += char;
-      } else if (char === '\n') {
-        out += '\\n';
-      } else if (char === '\r') {
-        out += '\\r';
-      } else if (char === '\t') {
-        out += '\\t';
+
+    if (char === '\\') {
+      const next = raw[i + 1];
+      // `\u` must be followed by four hex digits to be an escape at all.
+      const validUnicode = next === 'u' && /^[0-9a-fA-F]{4}/.test(raw.slice(i + 2, i + 6));
+      if (next !== undefined && VALID_ESCAPES.has(next) && (next !== 'u' || validUnicode)) {
+        out += char + next;
+        i += 1;
       } else {
-        out += char;
+        // A literal backslash the model forgot to double.
+        out += '\\\\';
       }
       continue;
     }
-    if (char === '"') inString = true;
-    out += char;
+
+    if (char === '"') {
+      inString = false;
+      out += char;
+    } else if (char === '\n') {
+      out += '\\n';
+    } else if (char === '\r') {
+      out += '\\r';
+    } else if (char === '\t') {
+      out += '\\t';
+    } else {
+      out += char;
+    }
   }
 
   // Trailing commas before a closing brace or bracket.

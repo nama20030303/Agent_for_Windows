@@ -174,8 +174,11 @@ describe('agent loop — end to end', () => {
     const root = tempDir('nexus-ws-');
     cleanups.push(() => removeTempDir(root));
 
+    const finish = { name: 'finish', arguments: { report: 'Everything works and all tests pass.', verified: true, success: true } };
     const provider = new MockProvider([
-      { content: 'All done!', toolCalls: [{ name: 'finish', arguments: { report: 'Everything works and all tests pass.', verified: true, success: true } }] }
+      { content: 'All done!', toolCalls: [finish] },
+      // The agent refuses the first one; a stubborn model simply repeats it.
+      { content: 'I insist.', toolCalls: [finish] }
     ]);
     const harness = await buildHarness({ provider, workspaceRoot: root, permissionMode: 'autonomous', autoApprove: true });
     cleanups.push(harness.cleanup);
@@ -189,10 +192,49 @@ describe('agent loop — end to end', () => {
       userMessage: 'Build something.'
     });
 
+    // Claiming a finished job without touching anything is refused outright,
+    // and the model is told to do the work instead.
+    const refusal = harness.events.find(
+      (e: any) => e.type === 'tool_result' && e.result?.tool === 'finish' && e.result?.success === false
+    ) as any;
+    expect(refusal, 'an empty finish must be refused once').toBeTruthy();
+    expect(refusal.result.error).toMatch(/not created, modified or deleted a single file/i);
+
+    // If it insists, the report says plainly that nothing happened.
     const completion = harness.events.find((e) => e.type === 'completion') as Extract<AgentEvent, { type: 'completion' }>;
     expect(completion.verified).toBe(false);
     expect(completion.report).toMatch(/unverified/i);
     expect(completion.report).toMatch(/no verification command was executed/i);
+    expect(completion.report).toMatch(/Nothing on disk has changed/i);
+  }, 60_000);
+
+  it('lets a real finish through untouched once work was actually done', async () => {
+    const root = tempDir('nexus-ws-');
+    cleanups.push(() => removeTempDir(root));
+
+    const provider = new MockProvider([
+      { content: 'Writing it.', toolCalls: [{ name: 'write_file', arguments: { path: 'notes.txt', content: 'hello\n' } }] },
+      { content: 'Done.', toolCalls: [{ name: 'finish', arguments: { report: 'Created notes.txt.', success: true } }] }
+    ]);
+    const harness = await buildHarness({ provider, workspaceRoot: root, permissionMode: 'autonomous', autoApprove: true });
+    cleanups.push(harness.cleanup);
+
+    await harness.agent.run({
+      sessionId: harness.sessionId,
+      projectId: harness.projectId,
+      workspaceRoot: root,
+      mode: 'agent',
+      shell: shell as 'bash',
+      userMessage: 'Create notes.txt.'
+    });
+
+    const refused = harness.events.some(
+      (e: any) => e.type === 'tool_result' && e.result?.tool === 'finish' && e.result?.success === false
+    );
+    expect(refused, 'a finish backed by real work must not be second-guessed').toBe(false);
+    const completion = harness.events.find((e) => e.type === 'completion') as Extract<AgentEvent, { type: 'completion' }>;
+    expect(completion.report).not.toMatch(/Nothing on disk has changed/i);
+    expect(harness.agent.getState(harness.sessionId)).toBe('COMPLETED');
   }, 60_000);
 
   it('stops the repair loop at the configured limit instead of looping forever', async () => {

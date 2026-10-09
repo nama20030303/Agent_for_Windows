@@ -32,6 +32,17 @@ you why. The usual causes:
 - *Wrong base URL* — a host that answers 200 with a different payload shape yields empty replies.
   Use *Test connection*.
 
+**The agent analysed the task, said it was finished, and the folder is empty**
+Two separate faults produced this, both fixed in build 25. A Windows path written into a tool call
+— `%APPDATA%\NexusCode\` or `C:\Users\me` — is not valid JSON, because `\N` and `\U` are not
+legal escapes, so the entire call used to be discarded and the step silently did nothing. Lone
+backslashes inside a string are now read as literal backslashes, which is the only thing they can
+have meant. Separately, `finish` is no longer taken at face value: in Agent and Auto mode, a report
+of success in a session that created, modified and deleted no files and ran no command is refused,
+and the model is told to do the work instead. If it insists, the report says in plain words that
+nothing on disk changed. Recording requirements and presenting a plan now also appear in the
+activity feed, so a run that is only analysing no longer looks frozen.
+
 **A call that looks right but does nothing (code with quotes)**
 Fixed in build 22. Source code is full of quote-comma pairs - `format!("{}", x)`, `#[serde(rename =
 "role")]` - and each one looks exactly like the end of a JSON string. The parser now tries every

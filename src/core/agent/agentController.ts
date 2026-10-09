@@ -76,6 +76,10 @@ interface SessionRuntime {
   filesCreated: Set<string>;
   filesModified: Set<string>;
   filesDeleted: Set<string>;
+  /** A tool that ran a command, a test or a process actually executed. */
+  ranSomething: boolean;
+  /** `finish` was already bounced back once for reporting work nobody did. */
+  emptyFinishes: number;
   verified: boolean;
   lastReport?: VerificationReport;
   pendingPlan?: Plan;
@@ -191,6 +195,8 @@ export class AgentController {
         filesCreated: new Set(),
         filesModified: new Set(),
         filesDeleted: new Set(),
+        ranSomething: false,
+        emptyFinishes: 0,
         verified: false,
         running: false
       };
@@ -581,6 +587,9 @@ export class AgentController {
     maxRepairAttempts: number
   ): Promise<{ result: ToolResult; pause: boolean; finish: boolean }> {
     if (META_TOOL_NAMES.has(call.name)) {
+      // Planning, analysis and reporting are work the user should see too: a
+      // run that only analysed requirements used to look like a dead app.
+      this.emit({ type: 'tool_call', sessionId: options.sessionId, call, risk: 'SAFE' });
       return this.handleMetaTool(call, options, rt, signal, maxRepairAttempts);
     }
 
@@ -619,6 +628,10 @@ export class AgentController {
       this.deps.permissions
     );
 
+    if (result.success && definition && ['terminal', 'testing', 'process'].includes(definition.category)) {
+      rt.ranSomething = true;
+    }
+
     this.emit({ type: 'tool_result', sessionId: options.sessionId, callId: call.id, result });
     this.timeline(options.sessionId, `${call.name}: ${result.summary ?? (result.success ? 'ok' : result.error ?? 'failed')}`);
     this.emitState(options.sessionId, 'EXECUTING', 'Working');
@@ -639,13 +652,17 @@ export class AgentController {
       case 'record_requirements': {
         const analysis: RequirementAnalysis = {
           summary: String(args.summary ?? ''),
+          // Models name these fields after the specification they were given
+          // rather than after our schema, so both spellings are accepted.
+          // Dropping a requirement because it said "description" left the
+          // analysis panel blank.
           requirements: (args.requirements as any[] ?? []).map((r) => ({
             id: uid('req'),
-            kind: r.kind ?? 'implicit',
-            topic: r.topic ?? 'general',
-            statement: r.statement ?? '',
+            kind: r.kind ?? r.type ?? 'implicit',
+            topic: r.topic ?? r.category ?? 'general',
+            statement: String(r.statement ?? r.description ?? r.requirement ?? r.text ?? ''),
             confidence: typeof r.confidence === 'number' ? r.confidence : 0.6,
-            importance: r.importance ?? 'medium'
+            importance: r.importance ?? r.priority ?? 'medium'
           })),
           questions: [],
           assumptions: (args.assumptions as string[]) ?? []
@@ -811,6 +828,39 @@ export class AgentController {
         const actuallyVerified = rt.verified && rt.lastReport?.passed === true;
         const success = args.success !== false;
         let report = String(args.report ?? '');
+
+        // Nothing was written, deleted or executed, yet the model wants to
+        // report a finished job. That is exactly the fake success this agent
+        // exists to prevent, so the call is refused once and the model is told
+        // to either do the work or admit that it did not.
+        const touchedNothing =
+          rt.filesCreated.size === 0 && rt.filesModified.size === 0 && rt.filesDeleted.size === 0 && !rt.ranSomething;
+        const executing = options.mode === 'agent' || options.mode === 'auto';
+        if (success && touchedNothing && executing && rt.emptyFinishes === 0) {
+          rt.emptyFinishes += 1;
+          this.timeline(sessionId, 'Model reported success without doing anything; refused');
+          const refusal: ToolResult = {
+            success: false,
+            tool: call.name,
+            callId: call.id,
+            error:
+              'You cannot finish yet: this session has not created, modified or deleted a single file and has ' +
+              'not run a single command, so there is nothing to report as done. Planning and recording ' +
+              'requirements are not the work. Start building now, one tool call per message: create the ' +
+              'directory layout, then write the files with `write_file` and `append_file`. If the task really ' +
+              'needs no changes, call `finish` again with success=false and say plainly what is missing.',
+            errorType: 'UNKNOWN_ERROR'
+          };
+          // Meta tools are normally silent, but the user must see the agent
+          // catching itself reporting a job it never did.
+          this.emit({ type: 'tool_result', sessionId, callId: call.id, result: refusal });
+          return { result: refusal, pause: false, finish: false };
+        }
+        if (touchedNothing) {
+          report +=
+            '\n\n---\n**Notice from Nexus Code:** no file was created, modified or deleted and no command was run ' +
+            'in this session. Nothing on disk has changed.';
+        }
 
         if (claimedVerified && !actuallyVerified) {
           report +=

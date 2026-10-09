@@ -323,3 +323,52 @@ describe('a model whose JSON will not parse', () => {
     expect(states).toContain('COMPLETED');
   }, 30_000);
 });
+
+describe('the requirements-then-nothing session from the report', () => {
+  it('runs the call with the Windows path and refuses to call it done', async () => {
+    const root = tempDir('nexus-requirements-');
+    cleanups.push(() => removeTempDir(root));
+
+    const block = (call: unknown) => '```tool_call\n' + JSON.stringify(call) + '\n```';
+    // Written by hand, exactly as the model sent it: the backslashes in the
+    // Windows path are not escaped, which makes the JSON invalid.
+    const requirements =
+      '{"tool": "record_requirements", "arguments": {"summary": "Build Nexus Code.", ' +
+      '"requirements": [{"id": "req-001", "description": "Windows desktop application", ' +
+      '"type": "explicit", "priority": "critical", "confidence": 1.0}], ' +
+      '"assumptions": ["Configuration via %APPDATA%\\NexusCode\\ with secure API key storage"]}}';
+
+    const provider = new MockProvider([
+      { content: requirements },
+      // The old failure mode: straight from analysis to "all done".
+      { content: 'All set.\n\n' + block({ tool: 'finish', arguments: { report: 'Implementation complete.', success: true, verified: true } }) },
+      { content: 'You are right.\n\n' + block({ tool: 'write_file', arguments: { path: 'main.py', content: 'print("hi")\n' } }) },
+      { content: 'Done.\n\n' + block({ tool: 'finish', arguments: { report: 'Created main.py.', success: true, verified: false } }) }
+    ]);
+
+    const harness = await buildHarness({ provider, workspaceRoot: root, permissionMode: 'autonomous', autoApprove: true });
+    cleanups.push(harness.cleanup);
+
+    await harness.agent.run({
+      sessionId: harness.sessionId,
+      projectId: harness.projectId,
+      workspaceRoot: root,
+      mode: 'agent',
+      shell: 'bash',
+      userMessage: 'build nexus code'
+    });
+
+    // The requirements call must not be thrown away over a backslash.
+    const calls = harness.events.filter((e: any) => e.type === 'tool_call').map((e: any) => e.call.name);
+    expect(calls).toContain('record_requirements');
+
+    // And "finished" with an empty folder must not be accepted.
+    const history = provider.requests[0].messages;
+    expect(history.some((m) => m.content.includes('not created, modified or deleted a single file'))).toBe(true);
+
+    // After the push-back, real work happened.
+    expect(fs.readFileSync(path.join(root, 'main.py'), 'utf8')).toBe('print("hi")\n');
+    const completion = harness.events.find((e: any) => e.type === 'completion') as any;
+    expect(completion.report).not.toMatch(/Nothing on disk has changed/i);
+  }, 30_000);
+});

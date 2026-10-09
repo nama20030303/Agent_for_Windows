@@ -124,3 +124,36 @@ describe('the Rust file from the report', () => {
     expect(result.malformed).toBe(true);
   });
 });
+
+
+describe('Windows paths inside the JSON', () => {
+  // Reported from a real session: the model recorded its requirements and the
+  // call vanished, because `\N` in `%APPDATA%\NexusCode\` is not a legal JSON
+  // escape. The whole reply was discarded and the agent appeared to idle.
+  it('accepts a call whose string holds an unescaped Windows path', () => {
+    const raw =
+      '{"tool": "record_requirements", "arguments": {"summary": "s", "assumptions": ' +
+      '["Configuration via %APPDATA%\\NexusCode\\ with secure API key storage"]}}';
+    const result = extractTextToolCalls(raw, ['record_requirements'], { record_requirements: ['summary', 'assumptions'] });
+    expect(result.malformed).toBe(false);
+    expect(result.calls).toHaveLength(1);
+    const args = JSON.parse(result.calls[0].arguments);
+    expect(args.assumptions[0]).toBe('Configuration via %APPDATA%\\NexusCode\\ with secure API key storage');
+  });
+
+  it('writes a file to a literal Windows path without mangling it', () => {
+    const raw = '```tool_call\n{"tool": "write_file", "arguments": {"path": "C:\\Users\\me\\app\\main.py", "content": "x = 1\n"}}\n```';
+    const result = extractTextToolCalls(raw, ['write_file'], { write_file: ['path', 'content'] });
+    expect(result.calls).toHaveLength(1);
+    const args = JSON.parse(result.calls[0].arguments);
+    expect(args.path).toBe('C:\\Users\\me\\app\\main.py');
+    expect(args.content).toBe('x = 1\n');
+  });
+
+  it('still honours the escapes a careful model does write', () => {
+    const raw = '{"tool": "write_file", "arguments": {"path": "a.txt", "content": "line\\none\\t\\"quoted\\"\\u0041"}}';
+    const result = extractTextToolCalls(raw, ['write_file'], { write_file: ['path', 'content'] });
+    expect(result.calls).toHaveLength(1);
+    expect(JSON.parse(result.calls[0].arguments).content).toBe('line\none\t"quoted"A');
+  });
+});
