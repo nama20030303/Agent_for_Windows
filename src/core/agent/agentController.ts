@@ -233,6 +233,7 @@ export class AgentController {
     let proseOnlyReplies = 0;
     let invented = 0;
     let cutOff = 0;
+    let malformedReplies = 0;
 
     try {
       const endpoint = this.deps.provider.describe();
@@ -257,9 +258,16 @@ export class AgentController {
         // call so the agent can still act. Thinking models sometimes put it in
         // the reasoning channel, so that is checked too.
         if (response.toolCalls.length === 0) {
-          const names = this.deps.tools.definitions().map((d) => d.name);
-          const fromText = extractTextToolCalls(response.content, names);
-          const fromReasoning = fromText.calls.length ? null : extractTextToolCalls(response.reasoning ?? '', names);
+          const definitions = this.deps.tools.definitions();
+          const names = definitions.map((d) => d.name);
+          // The declared argument names let a salvaged parse be sanity-checked.
+          const schemas: Record<string, string[]> = {};
+          for (const definition of definitions) {
+            const properties = (definition.parameters as { properties?: Record<string, unknown> } | undefined)?.properties;
+            schemas[definition.name] = properties ? Object.keys(properties) : [];
+          }
+          const fromText = extractTextToolCalls(response.content, names, schemas);
+          const fromReasoning = fromText.calls.length ? null : extractTextToolCalls(response.reasoning ?? '', names, schemas);
           const found = fromReasoning?.calls.length ? fromReasoning : fromText;
           // Invented names from either channel: losing them would turn a
           // correctable mistake into a dead run.
@@ -269,6 +277,19 @@ export class AgentController {
             response.toolCalls = found.calls;
             if (fromText.calls.length) response.content = found.cleaned;
             this.timeline(options.sessionId, `Interpreted ${found.calls.length} textual tool call(s) from the model`);
+          } else if (fromText.malformed && malformedReplies < 2) {
+            // It used the protocol, but the JSON would not parse — almost
+            // always an unescaped quote or newline in a file's content.
+            malformedReplies += 1;
+            rt.history.push({
+              role: 'user',
+              content:
+                'Your tool_call block was not valid JSON, so nothing ran. Inside a JSON string every double ' +
+                'quote must be written as \\" and every line break as \\n. Send the call again, correctly ' +
+                'escaped, and keep the content short enough to finish in one reply.'
+            });
+            this.timeline(options.sessionId, 'Model sent a malformed tool call; asking it to escape the JSON');
+            continue;
           } else if (truncated.length && cutOff < 2) {
             // The call was cut off mid-JSON. Running it would write half a
             // file, so ask for it again in pieces the model can finish.
@@ -846,6 +867,7 @@ export class AgentController {
     let proseOnlyReplies = 0;
     let invented = 0;
     let cutOff = 0;
+    let malformedReplies = 0;
     try {
       for (let i = 0; i < maxIterations; i++) {
         if (abort.signal.aborted) break;

@@ -91,18 +91,28 @@ function parseRest(text: string, from: number, depth: number): Parsed {
     const name = key[1];
 
     if (text[i] === '"') {
-      // Unescaped quotes inside the value make the real end ambiguous, so try
-      // every candidate and keep the one the rest of the object agrees with.
+      // Unescaped quotes inside the value make the real end ambiguous. Code
+      // routinely contains `format!("{}", x)`, whose quote-comma pair looks
+      // exactly like the end of a JSON string, so the first candidate that
+      // parses is not good enough: score them and keep the best.
       let resolved: Parsed = null;
       let chosen = -1;
+      let best = -1;
       for (const end of closingQuotes(text, i + 1)) {
         const after = continuation(text, end + 1, depth);
-        if (after) {
+        if (!after) continue;
+        // Ties are broken towards the reading that recovers more of the
+        // object: swallowing a later key into the string loses it.
+        const score = scoreContinuation(text, after, depth);
+        if (score > best) {
+          best = score;
           resolved = after;
           chosen = end;
-          break;
         }
       }
+      // Even when the object as a whole was cut off, the best candidate still
+      // gives the correct value for this key - which is how the tool name
+      // survives a truncated call and can be reported to the model.
       if (!resolved) {
         // The text stops inside this string: the reply was cut off.
         value[name] = decodeEscapes(text.slice(i + 1));
@@ -134,6 +144,23 @@ function parseRest(text: string, from: number, depth: number): Parsed {
     i += separator[0].length;
     if (separator[1] === '}') return { value, end: i, truncated: false };
   }
+}
+
+/**
+ * How much the text after a candidate string-end looks like the genuine
+ * remainder of the object.
+ *
+ * The strongest evidence is that exactly the enclosing braces are left over:
+ * an object nested one level deep should be followed by one `}`. "Everything
+ * was consumed" is not the same thing, and using it swallowed sibling keys.
+ * A parse that ran out of input is the weakest evidence there is, so it never
+ * competes on key count.
+ */
+function scoreContinuation(text: string, after: NonNullable<Parsed>, depth: number): number {
+  if (after.truncated) return 0;
+  const rest = text.slice(after.end);
+  const exact = new RegExp(`^\\s*\\}{${depth}}\\s*$`).test(rest);
+  return (exact ? 300 : 100) + Math.min(Object.keys(after.value).length, 20);
 }
 
 /** What follows a value: either the object closes, or another pair begins. */

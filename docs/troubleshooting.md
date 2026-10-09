@@ -32,6 +32,15 @@ you why. The usual causes:
 - *Wrong base URL* — a host that answers 200 with a different payload shape yields empty replies.
   Use *Test connection*.
 
+**A call that looks right but does nothing (code with quotes)**
+Fixed in build 22. Source code is full of quote-comma pairs - `format!("{}", x)`, `#[serde(rename =
+"role")]` - and each one looks exactly like the end of a JSON string. The parser now tries every
+possible end of the value and keeps the one that leaves precisely the enclosing braces behind, so a
+Rust or JavaScript file survives the round trip byte for byte. Where the reading is genuinely
+ambiguous, the tool's own argument names decide: a salvaged call carrying arguments the tool does
+not have is refused rather than writing mangled content, and the model is asked to escape its JSON
+properly.
+
 **The model sends a command but nothing happens**
 Fixed in build 20. Two shapes of almost-valid JSON were being thrown away:
 - **unescaped quotes and raw newlines** inside an argument, which is what happens whenever a model

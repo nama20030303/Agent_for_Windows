@@ -68,3 +68,59 @@ describe('what the agent does with those calls', () => {
     expect(extractTextToolCalls(text, tools).truncatedCalls).toEqual(['write_file']);
   });
 });
+
+describe('the Rust file from the report', () => {
+  const rust = [
+    '//! AI Provider abstraction layer',
+    '',
+    'use async_trait::async_trait;',
+    'use serde::{Deserialize, Serialize};',
+    '',
+    '#[derive(Debug, Clone, Serialize, Deserialize)]',
+    'pub struct ChatMessage {',
+    '    #[serde(rename = "role")]',
+    '    pub role: String,',
+    '}',
+    '',
+    'impl Provider {',
+    '    pub fn describe(&self) -> String {',
+    '        format!("{} at {}", self.model, self.base_url)',
+    '    }',
+    '}',
+    ''
+  ].join('\n');
+
+  it('recovers the file byte for byte despite quote-comma pairs in the code', () => {
+    // `format!("{}", x)` ends a quote with a comma, which looks exactly like
+    // the end of a JSON string. Picking that spot lost the call entirely.
+    const text = `{"tool": "write_file", "arguments": {"path": "src/ai_provider.rs", "content": "${rust}"}}`;
+    const { calls, truncatedCalls } = extractTextToolCalls(text, ['write_file']);
+    expect(truncatedCalls).toHaveLength(0);
+    expect(calls).toHaveLength(1);
+    const args = JSON.parse(calls[0].arguments);
+    expect(args.path).toBe('src/ai_provider.rs');
+    expect(args.content).toBe(rust);
+  });
+
+  it('does not lose a key that follows the code', () => {
+    const text = `{"tool": "write_file", "arguments": {"content": "${rust}", "path": "a.rs"}}`;
+    const args = JSON.parse(extractTextToolCalls(text, ['write_file']).calls[0].arguments);
+    expect(args.path).toBe('a.rs');
+    expect(args.content).toBe(rust);
+  });
+
+  it('refuses a salvaged call whose arguments do not match the tool', () => {
+    // Ambiguous input: raw JSON written into a .json file. The split cannot be
+    // trusted, so the call must not run with mangled content.
+    const text = '{"tool":"write_file","arguments":{"path":"p.json","content":"{"a": "b", "c": "d"}"}}';
+    const result = extractTextToolCalls(text, ['write_file'], { write_file: ['path', 'content'] });
+    expect(result.calls).toHaveLength(0);
+    expect(result.truncatedCalls).toEqual(['write_file']);
+  });
+
+  it('flags a block that is shaped like a call but will not parse', () => {
+    const result = extractTextToolCalls('```tool_call\n{"tool": write_file, path: a.rs}\n```', ['write_file']);
+    expect(result.calls).toHaveLength(0);
+    expect(result.malformed).toBe(true);
+  });
+});

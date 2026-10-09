@@ -155,25 +155,27 @@ interface LooseParse {
   value: any;
   /** The text ran out mid-object: the model's reply was cut off. */
   truncated: boolean;
+  /** Recovered by the tolerant parser, so the reading could be ambiguous. */
+  salvaged: boolean;
 }
 
 function parseLoosely(raw: string): LooseParse | null {
   const text = raw.trim();
   if (!text) return null;
   try {
-    return { value: JSON.parse(text), truncated: false };
+    return { value: JSON.parse(text), truncated: false, salvaged: false };
   } catch {
     /* fall through */
   }
   try {
-    return { value: JSON.parse(repairJson(text)), truncated: false };
+    return { value: JSON.parse(repairJson(text)), truncated: false, salvaged: false };
   } catch {
     /* fall through */
   }
   // Last resort: a key-by-key walk that tolerates unescaped quotes inside a
   // string value and an object that never closes.
   const salvaged = salvageJsonObject(text);
-  return salvaged ? { value: salvaged.value, truncated: salvaged.truncated } : null;
+  return salvaged ? { value: salvaged.value, truncated: salvaged.truncated, salvaged: true } : null;
 }
 
 /** A parsed block that names a tool nobody has, so the model can be told. */
@@ -193,10 +195,14 @@ export interface TruncatedToolCall {
   truncated: string;
 }
 
+/** Allowed argument names per tool, used to sanity-check a salvaged call. */
+export type ToolSchemas = Record<string, string[]>;
+
 function readCall(
   raw: string,
   index: number,
-  known?: Set<string>
+  known?: Set<string>,
+  schemas?: ToolSchemas
 ): RawToolCall | UnknownToolCall | TruncatedToolCall | null {
   const loose = parseLoosely(raw);
   if (!loose) return null;
@@ -229,6 +235,14 @@ function readCall(
     serialised = reparsed && typeof reparsed.value === 'object' ? JSON.stringify(reparsed.value) : args;
   } else {
     serialised = JSON.stringify(args ?? {});
+  }
+
+  // A salvaged parse is a guess. If it produced argument names the tool does
+  // not have, the guess is wrong, and running it would write mangled content.
+  const allowed = schemas?.[name];
+  if (loose.salvaged && allowed?.length && typeof args === 'object' && args) {
+    const unexpected = Object.keys(args).filter((key) => !allowed.includes(key));
+    if (unexpected.length) return { truncated: name };
   }
 
   return { id: `text_call_${index}`, name, arguments: serialised };
@@ -273,16 +287,22 @@ export interface TextToolCallExtraction {
   cleaned: string;
   /** Tool names the model invented. Reported back so it can correct itself. */
   unknownTools: string[];
-  /** Calls whose JSON was cut off, so they were not run. */
+  /** Calls whose JSON was cut off or could not be trusted, so they were not run. */
   truncatedCalls: string[];
+  /** The message contained something shaped like a call that would not parse. */
+  malformed: boolean;
 }
 
 /**
  * @param knownTools when supplied, only calls naming a real tool are accepted.
  *        This is what makes scanning unfenced text safe.
  */
-export function extractTextToolCalls(content: string, knownTools?: Iterable<string>): TextToolCallExtraction {
-  if (!content || !content.includes('{')) return { calls: [], cleaned: content ?? '', unknownTools: [], truncatedCalls: [] };
+export function extractTextToolCalls(
+  content: string,
+  knownTools?: Iterable<string>,
+  schemas?: ToolSchemas
+): TextToolCallExtraction {
+  if (!content || !content.includes('{')) return { calls: [], cleaned: content ?? '', unknownTools: [], truncatedCalls: [], malformed: false };
 
   const known = knownTools ? new Set(knownTools) : undefined;
   const calls: RawToolCall[] = [];
@@ -315,7 +335,7 @@ export function extractTextToolCalls(content: string, knownTools?: Iterable<stri
     const language = match[1].toLowerCase();
     if (CODE_LANGUAGES.has(language)) continue;
 
-    accept(readCall(match[2], calls.length, known), match[0]);
+    accept(readCall(match[2], calls.length, known, schemas), match[0]);
   }
   outsideFences += content.slice(cursor);
 
@@ -323,7 +343,7 @@ export function extractTextToolCalls(content: string, knownTools?: Iterable<stri
   // forgot the closing fence.
   if (!calls.length) {
     const open = content.match(/```(?:tool_call|tool|json)?[ \t]*\r?\n([\s\S]*)$/);
-    if (open && !open[1].includes('```')) accept(readCall(open[1], 0, known), open[0]);
+    if (open && !open[1].includes('```')) accept(readCall(open[1], 0, known, schemas), open[0]);
   }
 
   // 2. A JSON object written without a fence, anywhere in the message. Only
@@ -332,14 +352,14 @@ export function extractTextToolCalls(content: string, knownTools?: Iterable<stri
   if (!calls.length && known) {
     for (const span of jsonSpans(outsideFences)) {
       const text = outsideFences.slice(span.start, span.end);
-      accept(readCall(text, calls.length, known), text);
+      accept(readCall(text, calls.length, known, schemas), text);
     }
   }
 
   // 3. The whole message is one JSON object (no fence, no tool list).
   if (!calls.length && !known) {
     const trimmed = content.trim();
-    if (trimmed.startsWith('{') && trimmed.endsWith('}')) accept(readCall(trimmed, 0, known), trimmed);
+    if (trimmed.startsWith('{') && trimmed.endsWith('}')) accept(readCall(trimmed, 0, known, schemas), trimmed);
   }
 
   // 4. A call the model never finished writing: no balanced braces at all, so
@@ -348,10 +368,15 @@ export function extractTextToolCalls(content: string, knownTools?: Iterable<stri
     // Only outside code fences: a JSON-looking line inside a ```python block
     // is part of the program, not an instruction.
     const start = outsideFences.search(/\{\s*"(?:tool|name|tool_name|function)"/);
-    if (start >= 0) accept(readCall(outsideFences.slice(start), 0, known), outsideFences.slice(start));
+    if (start >= 0) accept(readCall(outsideFences.slice(start), 0, known, schemas), outsideFences.slice(start));
   }
 
   let cleaned = content;
   for (const block of remove) cleaned = cleaned.replace(block, '');
-  return { calls, cleaned: cleaned.trim(), unknownTools, truncatedCalls };
+  // Something that looks like a call but produced nothing: the model tried
+  // and its JSON was broken. That is worth saying, and worth asking again for.
+  const looksLikeCall = /"(?:tool|name|tool_name)"\s*:\s*"/.test(outsideFences) || /```tool_call/.test(content);
+  const malformed = !calls.length && !unknownTools.length && !truncatedCalls.length && looksLikeCall;
+
+  return { calls, cleaned: cleaned.trim(), unknownTools, truncatedCalls, malformed };
 }

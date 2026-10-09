@@ -282,3 +282,44 @@ describe('a model whose call is cut off by the output limit', () => {
     expect(states).not.toContain('BLOCKED');
   }, 30_000);
 });
+
+describe('a model whose JSON will not parse', () => {
+  it('is asked to escape it, and the run continues', async () => {
+    const root = tempDir('nexus-malformed-');
+    cleanups.push(() => removeTempDir(root));
+
+    const provider = new MockProvider([
+      { content: '```tool_call\n{"tool": write_file, path: main.rs}\n```' },
+      {
+        content:
+          '```tool_call\n' +
+          JSON.stringify({ tool: 'write_file', arguments: { path: 'main.rs', content: 'fn main() {}\n' } }) +
+          '\n```'
+      },
+      {
+        content:
+          '```tool_call\n' +
+          JSON.stringify({ tool: 'finish', arguments: { report: 'Created main.rs', success: true, verified: false } }) +
+          '\n```'
+      }
+    ]);
+
+    const harness = await buildHarness({ provider, workspaceRoot: root, permissionMode: 'autonomous', autoApprove: true });
+    cleanups.push(harness.cleanup);
+
+    await harness.agent.run({
+      sessionId: harness.sessionId,
+      projectId: harness.projectId,
+      workspaceRoot: root,
+      mode: 'agent',
+      shell: 'bash',
+      userMessage: 'create main.rs'
+    });
+
+    expect(fs.existsSync(path.join(root, 'main.rs'))).toBe(true);
+    const nudge = provider.requests[0].messages.find((m) => m.content.includes('not valid JSON'));
+    expect(nudge, 'the model must be told its JSON was broken').toBeTruthy();
+    const states = harness.events.filter((e) => e.type === 'agent_state_change').map((e: any) => e.state);
+    expect(states).toContain('COMPLETED');
+  }, 30_000);
+});
