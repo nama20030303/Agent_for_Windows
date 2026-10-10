@@ -222,7 +222,9 @@ function readCall(
   raw: string,
   index: number,
   known?: Set<string>,
-  schemas?: ToolSchemas
+  schemas?: ToolSchemas,
+  /** The JSON was found loose in prose rather than in a block the model marked as a call. */
+  unfenced = false
 ): RawToolCall | UnknownToolCall | TruncatedToolCall | null {
   const loose = parseLoosely(raw);
   if (!loose) return null;
@@ -260,9 +262,14 @@ function readCall(
   // A salvaged parse is a guess. If it produced argument names the tool does
   // not have, the guess is wrong, and running it would write mangled content.
   const allowed = schemas?.[name];
-  if (loose.salvaged && allowed?.length && typeof args === 'object' && args) {
+  if ((loose.salvaged || unfenced) && allowed?.length && typeof args === 'object' && args) {
     const unexpected = Object.keys(args).filter((key) => !allowed.includes(key));
-    if (unexpected.length) return { truncated: name };
+    // A salvaged parse with unexpected keys is a misread. The same keys in
+    // JSON picked out of prose mean it was never a call at all: documentation
+    // that describes a tool — `{"name": "read_file", "parameters": {...}}` —
+    // is a *description*, and a real session executed one. Repository and
+    // model text is data, so it has to fit the schema before it can act.
+    if (unexpected.length) return unfenced && !loose.salvaged ? null : { truncated: name };
   }
 
   // The id has to be unique for the lifetime of the session, not just within
@@ -271,6 +278,54 @@ function readCall(
   // showed the same outcome on every line.
   textCallCounter += 1;
   return { id: `text_call_${index}_${textCallCounter}`, name, arguments: serialised };
+}
+
+
+/**
+ * The other dialect models use for tool calls:
+ *
+ *   <tool_call>
+ *   <function=write_file>
+ *   <parameter=path>docs/notes.md</parameter>
+ *   <parameter=content>
+ *   anything at all, quotes and backslashes included
+ *   </parameter>
+ *   </function>
+ *   </tool_call>
+ *
+ * Several model families emit this instead of JSON, and it has a real
+ * advantage for an agent that writes source code: nothing inside a parameter
+ * needs escaping, so none of the quote, newline or backslash accidents that
+ * break JSON can happen. Both spellings of the attribute form are accepted
+ * (`<function=name>` and `<function name="name">`), and a bare
+ * `<tool_call>{json}</tool_call>` is handed to the JSON reader.
+ */
+const XML_CALL = /<(tool_call|function_call|invoke)>([\s\S]*?)<\/\1>|<function[= ]"?([a-zA-Z0-9_.-]+)"?\s*>([\s\S]*?)<\/function>/g;
+const XML_FUNCTION = /<(?:function|invoke)(?:=|\s+name=)"?([a-zA-Z0-9_.-]+)"?\s*>([\s\S]*?)(?:<\/(?:function|invoke)>|$)/;
+const XML_PARAM = /<parameter(?:=|\s+name=)"?([a-zA-Z0-9_.-]+)"?\s*>([\s\S]*?)<\/parameter>/g;
+
+function readXmlCall(block: string, index: number, known?: Set<string>): RawToolCall | UnknownToolCall | null {
+  const fn = block.match(XML_FUNCTION);
+  if (!fn) return null;
+  const name = fn[1];
+  if (!TOOL_NAME.test(name)) return null;
+  if (known && !known.has(name)) return { unknown: name };
+
+  const args: Record<string, string | number | boolean> = {};
+  XML_PARAM.lastIndex = 0;
+  for (const param of fn[2].matchAll(XML_PARAM)) {
+    // A parameter written on its own lines carries one leading and one
+    // trailing newline from the layout, which are not part of the value.
+    let value = param[2].replace(/^\r?\n/, '').replace(/\r?\n$/, '');
+    const lowered = value.trim();
+    if (lowered === 'true' || lowered === 'false') args[param[1]] = lowered === 'true';
+    else if (/^-?\d+(?:\.\d+)?$/.test(lowered)) args[param[1]] = Number(lowered);
+    else args[param[1]] = value;
+  }
+  if (!Object.keys(args).length) return null;
+
+  textCallCounter += 1;
+  return { id: `xml_call_${index}_${textCallCounter}`, name, arguments: JSON.stringify(args) };
 }
 
 /** Every balanced `{...}` span in the text, outermost first. */
@@ -327,7 +382,10 @@ export function extractTextToolCalls(
   knownTools?: Iterable<string>,
   schemas?: ToolSchemas
 ): TextToolCallExtraction {
-  if (!content || !content.includes('{')) return { calls: [], cleaned: content ?? '', unknownTools: [], truncatedCalls: [], malformed: false };
+  const hasXml = /<(?:tool_call|function_call|invoke|function[= ])/.test(content ?? '');
+  if (!content || (!content.includes('{') && !hasXml)) {
+    return { calls: [], cleaned: content ?? '', unknownTools: [], truncatedCalls: [], malformed: false };
+  }
 
   const known = knownTools ? new Set(knownTools) : undefined;
   const calls: RawToolCall[] = [];
@@ -355,10 +413,21 @@ export function extractTextToolCalls(
     return true;
   };
 
+  // 0. The XML dialect, which needs no escaping and so is tried first.
+  if (hasXml) {
+    XML_CALL.lastIndex = 0;
+    for (const match of content.matchAll(XML_CALL)) {
+      const block = match[0];
+      const result = readXmlCall(block, calls.length, known);
+      if (result) accept(result, block);
+      else if (!remove.includes(block)) remove.push(block);
+    }
+  }
+
   // 1. Fenced blocks, skipping anything that is plainly source code.
   let outsideFences = '';
   let cursor = 0;
-  for (const match of content.matchAll(FENCE)) {
+  for (const match of calls.length ? [] : content.matchAll(FENCE)) {
     outsideFences += content.slice(cursor, match.index);
     cursor = (match.index ?? 0) + match[0].length;
 
@@ -382,7 +451,7 @@ export function extractTextToolCalls(
   if (!calls.length && known) {
     for (const span of jsonSpans(outsideFences)) {
       const text = outsideFences.slice(span.start, span.end);
-      accept(readCall(text, calls.length, known, schemas), text);
+      accept(readCall(text, calls.length, known, schemas, true), text);
     }
   }
 
@@ -398,14 +467,15 @@ export function extractTextToolCalls(
     // Only outside code fences: a JSON-looking line inside a ```python block
     // is part of the program, not an instruction.
     const start = outsideFences.search(/\{\s*"(?:tool|name|tool_name|function)"/);
-    if (start >= 0) accept(readCall(outsideFences.slice(start), 0, known, schemas), outsideFences.slice(start));
+    if (start >= 0) accept(readCall(outsideFences.slice(start), 0, known, schemas, true), outsideFences.slice(start));
   }
 
   let cleaned = content;
   for (const block of remove) cleaned = cleaned.replace(block, '');
   // Something that looks like a call but produced nothing: the model tried
   // and its JSON was broken. That is worth saying, and worth asking again for.
-  const looksLikeCall = /"(?:tool|name|tool_name)"\s*:\s*"/.test(outsideFences) || /```tool_call/.test(content);
+  const looksLikeCall =
+    /"(?:tool|name|tool_name)"\s*:\s*"/.test(outsideFences) || /```tool_call/.test(content) || hasXml;
   const malformed = !calls.length && !unknownTools.length && !truncatedCalls.length && looksLikeCall;
 
   return { calls, cleaned: cleaned.trim(), unknownTools, truncatedCalls, malformed };

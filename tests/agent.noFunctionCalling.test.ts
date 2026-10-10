@@ -317,8 +317,10 @@ describe('a model whose JSON will not parse', () => {
     });
 
     expect(fs.existsSync(path.join(root, 'main.rs'))).toBe(true);
-    const nudge = provider.requests[0].messages.find((m) => m.content.includes('not valid JSON'));
-    expect(nudge, 'the model must be told its JSON was broken').toBeTruthy();
+    const nudge = provider.requests[0].messages.find((m) => m.content.includes('could not be read'));
+    expect(nudge, 'the model must be told its call was unreadable').toBeTruthy();
+    // And offered the way out that cannot be got wrong.
+    expect(nudge!.content).toContain('<parameter=content>');
     const states = harness.events.filter((e) => e.type === 'agent_state_change').map((e: any) => e.state);
     expect(states).toContain('COMPLETED');
   }, 30_000);
@@ -480,5 +482,52 @@ describe('one call per message, many messages', () => {
     const started = harness.events.filter((e: any) => e.type === 'tool_call').map((e: any) => e.call.id);
     const finished = new Set(harness.events.filter((e: any) => e.type === 'tool_result').map((e: any) => e.callId));
     for (const id of started) expect(finished.has(id), `call ${id} never reported a result`).toBe(true);
+  }, 30_000);
+});
+
+describe('a model that switches to the tag syntax mid-run', () => {
+  it('builds the file and never loses a turn to it', async () => {
+    const root = tempDir('nexus-xml-run-');
+    cleanups.push(() => removeTempDir(root));
+
+    const body = ['# Tool System', '', 'All calls go through `validate("path")` first.', ''].join('\n');
+    const provider = new MockProvider([
+      {
+        content: [
+          'Writing the specification.',
+          '',
+          '<tool_call>',
+          '<function=write_file>',
+          '<parameter=path>',
+          'docs/tools.md',
+          '</parameter>',
+          '<parameter=content>',
+          body,
+          '</parameter>',
+          '</function>',
+          '</tool_call>'
+        ].join('\n')
+      },
+      { content: '```tool_call\n' + JSON.stringify({ tool: 'finish', arguments: { report: 'Wrote docs/tools.md.', success: true } }) + '\n```' }
+    ]);
+
+    const harness = await buildHarness({ provider, workspaceRoot: root, permissionMode: 'autonomous', autoApprove: true });
+    cleanups.push(harness.cleanup);
+
+    await harness.agent.run({
+      sessionId: harness.sessionId,
+      projectId: harness.projectId,
+      workspaceRoot: root,
+      mode: 'agent',
+      shell: 'bash',
+      userMessage: 'write the tool specification'
+    });
+
+    expect(fs.readFileSync(path.join(root, 'docs/tools.md'), 'utf8')).toBe(body);
+    const shown = harness.events.filter((e: any) => e.type === 'assistant_message').map((e: any) => e.content);
+    expect(shown.join('\n')).toContain('Writing the specification.');
+    expect(shown.join('\n')).not.toContain('<parameter=');
+    const states = harness.events.filter((e) => e.type === 'agent_state_change').map((e: any) => e.state);
+    expect(states).toContain('COMPLETED');
   }, 30_000);
 });

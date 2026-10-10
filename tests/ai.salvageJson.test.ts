@@ -157,3 +157,81 @@ describe('Windows paths inside the JSON', () => {
     expect(JSON.parse(result.calls[0].arguments).content).toBe('line\none\t"quoted"A');
   });
 });
+
+describe('the XML dialect', () => {
+  const known = ['write_file', 'read_file', 'finish'];
+  const schemas = { write_file: ['path', 'content'], read_file: ['path', 'startLine'], finish: ['report', 'success'] };
+
+  // Taken from a real session: the model switched to this syntax and the app
+  // understood none of it, so two long replies produced nothing at all.
+  it('reads a call written as tags, keeping the content byte for byte', () => {
+    const content = ['# Tool System', '', '```typescript', 'interface X { "a": \'b\\\\c\' }', '```'].join('\n');
+    const raw = [
+      "I'll write the spec.",
+      '',
+      '<tool_call>',
+      '<function=write_file>',
+      '<parameter=path>',
+      'docs/tool-system.md',
+      '</parameter>',
+      '<parameter=content>',
+      content,
+      '</parameter>',
+      '</function>',
+      '</tool_call>'
+    ].join('\n');
+
+    const result = extractTextToolCalls(raw, known, schemas);
+    expect(result.calls).toHaveLength(1);
+    expect(result.calls[0].name).toBe('write_file');
+    const args = JSON.parse(result.calls[0].arguments);
+    expect(args.path).toBe('docs/tool-system.md');
+    // Nothing in this form needs escaping, so nothing may be altered.
+    expect(args.content).toBe(content);
+    // And the sentence the model wrote is what the user sees.
+    expect(result.cleaned).toBe("I'll write the spec.");
+    expect(result.malformed).toBe(false);
+  });
+
+  it('accepts the attribute spelling and converts obvious scalars', () => {
+    const raw =
+      '<tool_call>\n<function name="finish">\n<parameter name="report">All done</parameter>\n' +
+      '<parameter name="success">true</parameter>\n</function>\n</tool_call>';
+    const result = extractTextToolCalls(raw, known, schemas);
+    expect(result.calls).toHaveLength(1);
+    const args = JSON.parse(result.calls[0].arguments);
+    expect(args).toEqual({ report: 'All done', success: true });
+  });
+
+  it('reports an invented tool name in this form too', () => {
+    const raw = '<tool_call>\n<function=summon_dragon>\n<parameter=size>large</parameter>\n</function>\n</tool_call>';
+    const result = extractTextToolCalls(raw, known, schemas);
+    expect(result.calls).toHaveLength(0);
+    expect(result.unknownTools).toEqual(['summon_dragon']);
+  });
+});
+
+describe('documentation is not a command', () => {
+  // A real session wrote a specification that *described* the tools, and the
+  // app executed the description: read_file was called with the keys of a
+  // JSON schema. Text is data until it fits the tool it names.
+  it('ignores a JSON schema in prose that merely names a tool', () => {
+    const raw = [
+      'Here is the schema I will implement:',
+      '',
+      '{"name": "read_file", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}',
+      '',
+      'I will write it to the docs next.'
+    ].join('\n');
+
+    const result = extractTextToolCalls(raw, ['read_file', 'write_file'], { read_file: ['path', 'startLine', 'endLine'] });
+    expect(result.calls).toHaveLength(0);
+  });
+
+  it('still runs the same tool when the arguments really are its own', () => {
+    const raw = 'Reading it.\n\n{"name": "read_file", "arguments": {"path": "src/app.ts"}}';
+    const result = extractTextToolCalls(raw, ['read_file'], { read_file: ['path', 'startLine', 'endLine'] });
+    expect(result.calls).toHaveLength(1);
+    expect(JSON.parse(result.calls[0].arguments).path).toBe('src/app.ts');
+  });
+});

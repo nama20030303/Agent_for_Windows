@@ -75,6 +75,18 @@ export function describeToolsAsText(tools: ToolDefinition[]): string {
     '  with the first part and then append_file for each following part - one call per message.',
     '  A call that does not fit in one reply is cut off and nothing runs.',
     '',
+    'If the content has quotes, backslashes or line breaks that are awkward to escape, use this form',
+    'instead - it needs no escaping at all and is read exactly as written:',
+    '',
+    '<tool_call>',
+    '<function=write_file>',
+    '<parameter=path>game/snake.py</parameter>',
+    '<parameter=content>',
+    'print("hello")',
+    '</parameter>',
+    '</function>',
+    '</tool_call>',
+    '',
     'Available tools:',
     ...lines
   ].join('\n');

@@ -32,8 +32,17 @@ you why. The usual causes:
 - *Wrong base URL* — a host that answers 200 with a different payload shape yields empty replies.
   Use *Test connection*.
 
+**The model writes long replies and nothing appears on disk**
+Check the activity feed for two symptoms. If a step says *failed — Invalid arguments*, the model
+quoted a tool's own schema out of a document; text that merely names a tool is treated as data now,
+not as a command. If there are no steps at all, the model was probably using the tag syntax
+(`<tool_call><function=write_file>…`), which build 29 understands. That form needs no escaping, so
+it is also the recommended way to write files full of quotes and backslashes — the app now suggests
+it whenever a call cannot be read.
+
 **"Provider error (503)" and the run stops**
-The endpoint is overloaded or briefly unreachable. The app retries five times with growing pauses,
+The endpoint is overloaded or briefly unreachable — a dropped connection ("Network error: fetch
+failed") counts the same way. The app retries five times with growing pauses,
 honouring the provider's own `Retry-After` when it sends one. If it still cannot get through, the
 session is reported as **blocked**, not failed: every file already written is on disk and the
 session is intact. Say *continue* and the agent picks up where it stopped.

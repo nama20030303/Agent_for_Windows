@@ -297,9 +297,11 @@ export class AgentController {
             rt.history.push({
               role: 'user',
               content:
-                'Your tool_call block was not valid JSON, so nothing ran. Inside a JSON string every double ' +
-                'quote must be written as \\" and every line break as \\n. Send the call again, correctly ' +
-                'escaped, and keep the content short enough to finish in one reply.'
+                'Your tool call could not be read, so nothing ran. Easiest fix: send it in the form that ' +
+                'needs no escaping — <tool_call><function=write_file><parameter=path>a/b.py</parameter>' +
+                '<parameter=content>…file content exactly as it should be on disk…</parameter></function>' +
+                '</tool_call>. If you prefer JSON, every double quote inside a string must be written as ' +
+                '\\" and every line break as \\n. Keep the content short enough to finish in one reply.'
             });
             this.timeline(options.sessionId, 'Model sent a malformed tool call; asking it to escape the JSON');
             continue;
@@ -460,14 +462,17 @@ export class AgentController {
       // already done is on disk and in the session, so the run is reported as
       // blocked and the user is told it can simply be continued. Calling this
       // FAILED threw away a long run over a passing 503.
-      const transient = err instanceof AIProviderError && (err.kind === 'server' || err.kind === 'rate_limit' || err.kind === 'timeout');
+      const transient =
+        err instanceof AIProviderError &&
+        (err.kind === 'server' || err.kind === 'rate_limit' || err.kind === 'timeout' || err.kind === 'network');
       if (transient) {
         const done = rt.filesCreated.size + rt.filesModified.size + rt.filesDeleted.size;
         this.emit({
           type: 'error',
           sessionId: options.sessionId,
           message:
-            `${message} The provider is busy or unreachable right now, so the agent stopped between steps. ` +
+            `${message} The provider is busy or unreachable right now — a dropped connection counts — so the ` +
+            'agent stopped between steps. ' +
             `Nothing was lost${done ? ` — ${done} file(s) already changed are saved` : ''}: say "continue" to ` +
             'resume from where it stopped.'
         });
